@@ -1,0 +1,92 @@
+name: Build APKs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Build web app
+        run: |
+          npm ci
+          npm run build
+          npx cap sync android
+
+      # The signing key stays out of the repo. If you add PILLBOX_KEYSTORE_B64 and
+      # PILLBOX_KEYSTORE_PASSWORD secrets they are used; otherwise a key is made once and kept
+      # in this repository's private Actions cache so later builds install over earlier ones.
+      - name: Restore signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.pillbox-signing
+          key: pillbox-signing-v1
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.PILLBOX_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.PILLBOX_KEYSTORE_PASSWORD }}
+        run: |
+          dir="$HOME/.pillbox-signing"
+          mkdir -p "$dir"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/secret.keystore"
+            echo "PILLBOX_KEYSTORE=$RUNNER_TEMP/secret.keystore" >> "$GITHUB_ENV"
+            echo "PILLBOX_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ ! -f "$dir/pillbox.keystore" ]; then
+            openssl rand -hex 24 > "$dir/password"
+            keytool -genkeypair -noprompt -keystore "$dir/pillbox.keystore" -storetype PKCS12 \
+              -alias pillbox -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$(cat "$dir/password")" -dname "CN=Pillbox"
+          fi
+          echo "::add-mask::$(cat "$dir/password")"
+          echo "PILLBOX_KEYSTORE=$dir/pillbox.keystore" >> "$GITHUB_ENV"
+          echo "PILLBOX_KEYSTORE_PASSWORD=$(cat "$dir/password")" >> "$GITHUB_ENV"
+
+      - name: Build both APKs
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assemblePatientRelease assembleCaregiverRelease
+          mkdir -p ../out
+          cp app/build/outputs/apk/patient/release/*.apk ../out/Pillbox.apk
+          cp app/build/outputs/apk/caregiver/release/*.apk ../out/Pillbox-Care.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apks
+          path: out/*.apk
+
+      # A "latest" release gives a plain download link you can open on your phone.
+      - name: Publish to the Latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          prerelease: true
+          make_latest: false
+          body: |
+            Built from ${{ github.sha }}.
+            Install Pillbox.apk on the patient's phone and Pillbox-Care.apk on the caregiver's phone.
+          files: out/*.apk
