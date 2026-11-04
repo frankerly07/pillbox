@@ -1,6 +1,6 @@
 // Android-only features, each with a browser fallback so the app also runs in Chrome for testing.
 import { Capacitor } from "@capacitor/core";
-import { fmtTime, dosesOn } from "./model.js";
+import { fmtTime, dosesOn, reminderPlan } from "./model.js";
 
 export const isNative = Capacitor.isNativePlatform();
 
@@ -30,28 +30,29 @@ export async function askReminderPermission() {
   return p.display;
 }
 
-const slotId = time => 1000 + Number(time.replace(":", "")); // one alarm per time of day
-
-/** Patient app: one repeating daily alarm per time of day, listing every medicine due then. */
-export async function scheduleReminders(meds, patientName) {
-  if (!isNative) return;
+/**
+ * Patient app: one-off alarms for the next two weeks (see reminderPlan), skipping days outside a medicine's
+ * start/end dates and doses already logged. Re-run on every data change; runs are queued so they don't interleave.
+ */
+let reminderRun = Promise.resolve();
+export function scheduleReminders(meds, doses = {}) {
+  if (!isNative) return Promise.resolve();
+  return (reminderRun = reminderRun.catch(() => {}).then(() => replaceReminders(meds, doses)));
+}
+async function replaceReminders(meds, doses) {
   const L = await ln();
   const pending = await L.getPending();
-  if (pending.notifications.length) await L.cancel({ notifications: pending.notifications.filter(n => n.id >= 1000 && n.id < 4000).map(n => ({ id: n.id })) });
-  const byTime = {};
-  for (const m of meds) for (const t of m.times || []) (byTime[t] = byTime[t] || []).push(m);
-  const notifications = Object.entries(byTime).map(([t, list]) => {
-    const [hour, minute] = t.split(":").map(Number);
-    return {
-      id: slotId(t),
-      title: "Time for your " + fmtTime(t) + " medicine",
-      body: list.map(m => m.name + " " + (m.strength || "") + " (" + (m.perDose || "1 dose") + ")").join(", "),
-      schedule: { on: { hour, minute }, allowWhileIdle: true },
-      actionTypeId: "DOSE",
-      extra: { time: t, medIds: list.map(m => m.id) },
-      channelId: "doses",
-    };
-  });
+  const old = pending.notifications.filter(n => n.id >= 1000 && n.id < 4000).map(n => ({ id: n.id }));
+  if (old.length) await L.cancel({ notifications: old });
+  const notifications = reminderPlan(meds, doses).map(r => ({
+    id: r.id,
+    title: "Time for your " + fmtTime(r.time) + " medicine",
+    body: r.meds.map(m => m.name + " " + (m.strength || "") + " (" + (m.perDose || "1 dose") + ")").join(", "),
+    schedule: { at: r.at, allowWhileIdle: true },
+    actionTypeId: "DOSE",
+    extra: { day: r.day, time: r.time, medIds: r.meds.map(m => m.id) },
+    channelId: "doses",
+  }));
   if (notifications.length) await L.schedule({ notifications });
 }
 
