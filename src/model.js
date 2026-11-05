@@ -32,12 +32,171 @@ export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;"
 
 export const doseKey = (medId, day, time) => medId + "_" + day + "_" + time.replace(":", "");
 
-// Is this medicine scheduled on that day? (start date and optional end date)
-function activeOn(med, day) {
+// ---- medication types, dose units, supply units ----
+export const TYPES = {
+  pill: { label: "Pill / tablet", short: "Pill", icon: "💊", doseUnits: ["pills"], supplyUnits: ["pills"] },
+  injection: { label: "Injection", short: "Injection", icon: "💉", doseUnits: ["units", "mL", "mg", "doses"], supplyUnits: ["pens", "vials", "doses"] },
+  infusion: { label: "IV infusion", short: "IV infusion", icon: "💧", doseUnits: ["mL", "mg", "units", "doses"], supplyUnits: ["bags", "vials", "doses"] },
+  liquid: { label: "Liquid", short: "Liquid", icon: "🥄", doseUnits: ["mL", "mg", "doses"], supplyUnits: ["mL", "bottles", "doses"] },
+  other: { label: "Other", short: "Other", icon: "✚", doseUnits: ["doses", "units", "mL", "mg", "pills"], supplyUnits: ["doses", "vials", "pens", "bags", "bottles", "pills"] },
+};
+const UNIT_NAMES = { pills: ["pill", "pills"], mL: ["mL", "mL"], units: ["unit", "units"], mg: ["mg", "mg"], doses: ["dose", "doses"], vials: ["vial", "vials"], pens: ["pen", "pens"], bags: ["bag", "bags"], bottles: ["bottle", "bottles"] };
+export const CONTAINERS = ["vials", "pens", "bags", "bottles"];
+export const unitName = (unit, n = 2) => (UNIT_NAMES[unit] || [unit, unit])[Math.abs(n) === 1 ? 0 : 1];
+export const fmtNum = n => String(Math.round(n * 100) / 100);
+export const qty = (n, unit) => fmtNum(n) + " " + unitName(unit, Math.round(n * 100) / 100);
+
+// Pills per dose for old medicines: the explicit number, else the number at the start of "2 capsules", else 1.
+function legacyPills(med) {
+  if (Number(med.pillsPerDose) > 0) return Number(med.pillsPerDose);
+  const n = parseFloat(String(med.perDose || ""));
+  return n > 0 ? n : 1;
+}
+const SCHEDULES = ["daily", "weekdays", "everyNDays", "everyNWeeks", "monthly", "prn"];
+function scheduleOf(med) {
+  const s = med.schedule;
+  if (s && SCHEDULES.includes(s.kind)) return s;
+  return { kind: (med.times || []).length ? "daily" : "prn" }; // older medicines: times every day, none = as needed
+}
+/**
+ * Fill in type, dose and schedule for medicines saved before those existed: a pill, its old pills-per-dose,
+ * counted in pills, every day at its times (no times = as needed). Keeps every other field. Idempotent.
+ */
+export function normalizeMed(med) {
+  const m = { ...med };
+  if (!TYPES[m.type]) m.type = "pill";
+  const t = TYPES[m.type];
+  if (!(Number(m.doseAmount) > 0)) m.doseAmount = m.type === "pill" ? legacyPills(med) : 1;
+  else m.doseAmount = Number(m.doseAmount);
+  if (!UNIT_NAMES[m.doseUnit] || m.type === "pill") m.doseUnit = t.doseUnits[0];
+  if (!UNIT_NAMES[m.supplyUnit] || m.type === "pill") m.supplyUnit = t.supplyUnits[0];
+  m.perContainer = Number(m.perContainer) > 0 ? Number(m.perContainer) : null;
+  m.times = Array.isArray(m.times) ? m.times : [];
+  m.schedule = { ...scheduleOf(med) };
+  if (m.schedule.kind === "prn") m.times = [];
+  return m;
+}
+export const isPrn = med => scheduleOf(med).kind === "prn" || !(med.times || []).length;
+
+// Days between two local dates, ignoring daylight-saving shifts.
+const dayNum = d => Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+/**
+ * Is this medicine scheduled on that date? Respects start/end dates. As-needed (prn) is never "due".
+ * Every N days / weeks counts from the start date; monthly day 31 falls on the last day of shorter months.
+ * Without `doses` this is the fixed schedule; with them, interval schedules count from the last dose taken (scheduledOn).
+ */
+export function isDueOn(med, date, doses) {
+  if (doses) return scheduledOn(med, date, doses).length > 0;
+  const day = dayKey(date);
   if (med.start && day < med.start) return false;
   if (med.end && day > med.end) return false;
-  return true;
+  const s = scheduleOf(med);
+  const anchor = med.start ? parseDay(med.start) : new Date(1970, 0, 1);
+  const n = Math.max(1, Math.floor(Number(s.n) || 1));
+  const diff = dayNum(date) - dayNum(anchor);
+  switch (s.kind) {
+    case "prn": return false;
+    case "weekdays": return (s.days || []).map(Number).includes(date.getDay());
+    case "everyNDays": return diff >= 0 && diff % n === 0;
+    case "everyNWeeks": return diff >= 0 && diff % (7 * n) === 0;
+    case "monthly": {
+      const want = Math.floor(Number(s.dayOfMonth)) || anchor.getDate();
+      const last = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+      return date.getDate() === Math.min(Math.max(want, 1), last);
+    }
+    default: return true;
+  }
 }
+
+// ---- interval schedules count from the last dose taken ----
+// Every N days / every N weeks / monthly: once a dose is logged as taken, the next one is due that interval after
+// when it was actually taken (to the minute), not on the fixed date. schedule.fixed ("Keep fixed schedule") turns this off.
+const INTERVAL_KINDS = ["everyNDays", "everyNWeeks", "monthly"];
+export const anchorsToLastDose = med => { const s = scheduleOf(med); return INTERVAL_KINDS.includes(s.kind) && !s.fixed; };
+const minutesOf = t => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+/** `d` plus k intervals of the schedule, same local time of day. Monthly keeps the day of month (31 → last day). */
+export function addInterval(d, schedule, k = 1) {
+  const n = Math.max(1, Math.floor(Number(schedule.n) || 1)), out = new Date(d);
+  if (schedule.kind === "monthly") {
+    const dom = d.getDate();
+    out.setDate(1); out.setMonth(out.getMonth() + k);
+    out.setDate(Math.min(dom, new Date(out.getFullYear(), out.getMonth() + 1, 0).getDate()));
+  } else out.setDate(out.getDate() + k * n * (schedule.kind === "everyNWeeks" ? 7 : 1));
+  return out;
+}
+/**
+ * The taken (non-extra) doses an interval medicine counts from, oldest first: { at (rounded to the minute), slot (the
+ * set time of day it stands for), cutoff (the last day still on the old timing: the dose's day or the day it was taken) }.
+ * Empty for other schedules or with "Keep fixed schedule".
+ */
+export function doseAnchors(med, doses) {
+  const times = med.times || [];
+  if (!doses || !times.length || !anchorsToLastDose(med)) return [];
+  const out = [];
+  for (const d of Object.values(doses)) {
+    if (!d || d.medId !== med.id || d.status !== "taken" || d.extra || !d.at || !d.day) continue;
+    const ms = new Date(d.at).getTime(); if (isNaN(ms)) continue;
+    const at = new Date(Math.round(ms / 60000) * 60000), takenDay = dayKey(at);
+    const slot = times.includes(d.slot) ? d.slot : times.includes(d.time) ? d.time : times[0];
+    out.push({ at, slot, cutoff: takenDay > d.day ? takenDay : d.day });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+/**
+ * The doses of one medicine on one date: [{ time ("HH:MM" it's due), slot (its set time of day), when (ms) }].
+ * Fixed dates and set times until a dose is taken; after that, for interval schedules, the last dose taken + k intervals,
+ * with any other times of day keeping their distance from the one taken. Days up to a dose's cutoff keep the timing
+ * they had, so history doesn't move. `doses` may be the dose log or anchors from doseAnchors.
+ */
+export function scheduledOn(med, date, doses) {
+  const day = dayKey(date), times = med.times || [];
+  if (med.start && day < med.start) return [];
+  if (med.end && day > med.end) return [];
+  const anc = Array.isArray(doses) ? doses : doseAnchors(med, doses);
+  let a = null;
+  for (const x of anc) if (x.cutoff < day) a = x; // the latest dose taken before this day
+  if (!a) return isDueOn(med, date) ? times.map(t => ({ time: t, slot: t, when: at(date, t).getTime() })) : [];
+  const s = scheduleOf(med), base = minutesOf(a.slot), out = [];
+  const k0 = s.kind === "monthly"
+    ? (date.getFullYear() - a.at.getFullYear()) * 12 + date.getMonth() - a.at.getMonth()
+    : Math.round((dayNum(date) - dayNum(a.at)) / (Math.max(1, Math.floor(Number(s.n) || 1)) * (s.kind === "everyNWeeks" ? 7 : 1)));
+  for (let k = Math.max(1, k0 - 1); k <= k0 + 1; k++) {
+    const b = addInterval(a.at, s, k);
+    for (const t of times) {
+      const w = new Date(b); w.setMinutes(w.getMinutes() + minutesOf(t) - base);
+      if (dayKey(w) === day && !out.some(o => o.when === w.getTime())) out.push({ time: hm(w), slot: t, when: w.getTime() });
+    }
+  }
+  return out.sort((x, y) => x.when - y.when);
+}
+
+const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const ordinal = n => n + ((n % 100 >= 11 && n % 100 <= 13) ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+export function scheduleLabel(med) {
+  const s = scheduleOf(med), n = Math.max(1, Math.floor(Number(s.n) || 1));
+  switch (s.kind) {
+    case "prn": return "as needed";
+    case "weekdays": {
+      const d = [...new Set((s.days || []).map(Number))].sort();
+      if (d.length === 7) return "daily";
+      if (d.join() === "1,2,3,4,5") return "weekdays";
+      return d.map(x => WD[x]).join(", ") || "no days chosen";
+    }
+    case "everyNDays": return n === 1 ? "daily" : "every " + n + " days";
+    case "everyNWeeks": return n === 1 ? "weekly" : "every " + n + " weeks";
+    case "monthly": return "monthly on the " + ordinal(Math.floor(Number(s.dayOfMonth)) || (med.start ? parseDay(med.start).getDate() : 1));
+    default: return "daily";
+  }
+}
+// "40 units", "2 pills"; old pill medicines keep their own wording ("1 softgel") while it still matches.
+export function doseLabel(med) {
+  const m = normalizeMed(med);
+  if (m.type === "pill" && m.perDose && parseFloat(m.perDose) === m.doseAmount) return m.perDose;
+  return qty(m.doseAmount, m.doseUnit);
+}
+export const typeIcon = med => TYPES[normalizeMed(med).type].icon;
+// "Injection · 40 units · every 2 weeks"
+export const medSummary = med => [TYPES[normalizeMed(med).type].short, doseLabel(med), scheduleLabel(med)].join(" · ");
 
 /**
  * Scheduled doses for one date.
@@ -47,11 +206,19 @@ function activeOn(med, day) {
 export function dosesOn(date, meds, doses, { now = Date.now(), dueWindowMin = 60 } = {}) {
   const day = dayKey(date), win = dueWindowMin * 60000, out = [];
   for (const m of meds) {
-    if (!activeOn(m, day)) continue;
-    for (const t of m.times || []) {
-      const key = doseKey(m.id, day, t), when = at(date, t).getTime(), log = doses[key];
+    const sched = scheduledOn(m, date, doses), used = new Set();
+    // A dose logged at a time that has since moved (an earlier log's time was corrected) still counts for its slot.
+    const byKey = sched.map(x => doses[doseKey(m.id, day, x.time)] ? doseKey(m.id, day, x.time) : null);
+    byKey.forEach(k => k && used.add(k));
+    sched.forEach((x, i) => {
+      if (byKey[i]) return;
+      const hit = Object.keys(doses).find(k => { const l = doses[k]; return !used.has(k) && l && l.medId === m.id && l.day === day && !l.extra && l.time && (l.slot || l.time) === x.slot; });
+      if (hit) { used.add(hit); byKey[i] = hit; x.time = doses[hit].time; x.when = at(date, x.time).getTime(); }
+    });
+    for (const [i, { time, slot, when }] of sched.entries()) {
+      const key = byKey[i] || doseKey(m.id, day, time), log = doses[key];
       const status = log ? log.status : now < when - 15 * 60000 ? "upcoming" : now <= when + win ? "due" : "missed";
-      out.push({ key, med: m, day, time: t, when, status, log });
+      out.push({ key, med: m, day, time, slot, when, status, log });
     }
   }
   return out.sort((a, b) => a.when - b.when || a.med.name.localeCompare(b.med.name));
@@ -85,30 +252,93 @@ export function adherence(meds, doses, days = 14, now = Date.now()) {
   return { taken, total, pct: total ? Math.round(taken / total * 100) : null };
 }
 
-// ---- pill supply ----
-// Pills used per dose: the explicit number, else the number at the start of "2 capsules", else 1.
-export function pillsPerDose(med) {
-  if (Number(med.pillsPerDose) > 0) return Number(med.pillsPerDose);
-  const n = parseFloat(String(med.perDose || ""));
-  return n > 0 ? n : 1;
+// ---- supply ----
+/**
+ * How much of the supply one dose uses, in the supply unit: the dose amount when both are the same unit
+ * (2 pills, 5 mL), a share of a container when "doses per vial" is set, else one container / one dose.
+ */
+export function supplyPerDose(med) {
+  const m = normalizeMed(med);
+  if (m.supplyUnit === m.doseUnit) return m.doseAmount;
+  if (CONTAINERS.includes(m.supplyUnit)) return (m.doseUnit === "doses" ? m.doseAmount : 1) / (m.perContainer || 1);
+  return 1;
 }
-export const dailyUse = med => pillsPerDose(med) * (med.times || []).length;
-/** left, daily use, days left, run-out date, and whether to warn (pill threshold or a week or less left). */
-export function supply(med, now = Date.now()) {
-  const left = typeof med.stock === "number" ? med.stock : null;
-  const daily = dailyUse(med);
-  const daysLeft = left != null && daily > 0 ? Math.floor(left / daily) : null;
-  const runOut = daysLeft != null ? new Date(now + daysLeft * 86400000) : null;
-  const warnDays = med.refillDays ?? 7;
-  const low = left != null && (left <= (med.refillAt ?? 0) || (daysLeft != null && daysLeft <= warnDays));
-  const out = left != null && left <= 0;
-  return { left, daily, daysLeft, runOut, low, out, warnDays };
+/**
+ * left, use per dose, days left, run-out date (the first scheduled dose the supply can't cover), and whether
+ * to warn (at or below the count threshold, or that many days or fewer left). As-needed medicines have no run-out date.
+ */
+export function supply(med, now = Date.now(), doses) {
+  const m = normalizeMed(med);
+  const left = typeof m.stock === "number" ? m.stock : null;
+  const perDose = supplyPerDose(m);
+  let daysLeft = null, runOut = null;
+  if (left != null && !isPrn(m) && perDose > 0) {
+    const anc = doseAnchors(m, doses);
+    let need = 0;
+    for (let i = 0; i < 732 && runOut == null; i++) {
+      const date = new Date(now); date.setDate(date.getDate() + i); date.setHours(12, 0, 0, 0);
+      if (m.end && dayKey(date) > m.end) break;
+      for (const { when } of scheduledOn(m, date, anc)) {
+        if (i === 0 && when <= now) continue;
+        need += perDose;
+        if (need > left + 1e-9) { runOut = date; daysLeft = i; break; }
+      }
+    }
+  }
+  const warnDays = m.refillDays ?? 7;
+  const out = left != null && left <= 1e-9;
+  const low = left != null && (out || left <= (m.refillAt ?? 0) + 1e-9 || (daysLeft != null && daysLeft <= warnDays));
+  return { left, perDose, unit: m.supplyUnit, daysLeft, runOut, low, out, warnDays };
 }
-export const lowStock = meds => meds.filter(m => supply(m).low);
-// Pills a dose record took out of the bottle: what it saved when taken (older records: the medicine's current amount), 0 if not taken.
-export function pillsTaken(log, med) {
+export const lowStock = (meds, doses, now = Date.now()) => meds.filter(m => supply(m, now, doses).low);
+// Supply a dose record used: what it saved when taken (older records: the medicine's current amount), 0 if not taken.
+export function supplyTaken(log, med) {
   if (!log || log.status !== "taken") return 0;
-  return Number(log.pills) > 0 ? Number(log.pills) : pillsPerDose(med || {});
+  if (Number(log.used) > 0) return Number(log.used);
+  return Number(log.pills) > 0 ? Number(log.pills) : supplyPerDose(med || {});
+}
+
+// ---- logged times (when a dose was actually taken or skipped, vs. when it was scheduled) ----
+/** "Taken 8:14 AM" / "Skipped 8:05 AM"; adds the weekday when it was logged on another day than `day`. */
+export function fmtLogged(log, day) {
+  if (!log || !log.at) return "";
+  const d = new Date(log.at);
+  return (log.status === "skipped" ? "Skipped " : "Taken ") + (day && dayKey(d) !== day ? WD[d.getDay()] + " " : "") + fmtTime(hm(d));
+}
+/** "Scheduled 8:00 AM · Taken 8:14 AM", or just "Scheduled 8:00 AM" before it's logged. */
+export const fmtDoseTimes = d => (d.log && d.log.extra ? "Extra dose" : "Scheduled " + fmtTime(d.time)) + (d.log && d.log.at ? " · " + fmtLogged(d.log, d.day) : "");
+/** Where the "Taken earlier?" picker starts: now for today's doses, the scheduled time for other days. */
+export const defaultLogTime = (day, scheduled, now = Date.now()) => day === dayKey(new Date(now)) ? hm(new Date(now)) : scheduled;
+/**
+ * The moment a dose scheduled on `day` at `scheduled` was taken, from a picked "HH:MM". Normally that day; a time
+ * more than 12 h before the scheduled one means just after midnight (11 PM dose taken 12:30 AM) if that has passed.
+ * null when it would be in the future.
+ */
+export function logTimeFor(day, scheduled, picked, now = Date.now()) {
+  if (!/^\d{1,2}:\d{2}$/.test(picked || "")) return null;
+  const date = parseDay(day), sched = at(date, scheduled || "12:00").getTime();
+  let t = at(date, picked);
+  if (t.getTime() < sched - 12 * 3600000) { const next = new Date(t); next.setDate(next.getDate() + 1); if (next.getTime() <= now) t = next; }
+  return t.getTime() > now + 60000 ? null : t;
+}
+
+/**
+ * The new moment for a logged dose whose time is changed to `picked` ("HH:MM"): that time on the day before, the
+ * day of, or the day after when it was logged, whichever is nearest (within 12 h of) the logged moment, so the day
+ * doesn't jump. null when that would be in the future.
+ */
+export function editedLogTime(loggedAt, picked, now = Date.now()) {
+  if (!/^\d{1,2}:\d{2}$/.test(picked || "")) return null;
+  const was = new Date(loggedAt), ms = was.getTime();
+  if (isNaN(ms)) return null;
+  let best = null;
+  for (const k of [0, -1, 1]) {
+    const d = new Date(was); d.setDate(d.getDate() + k);
+    const t = at(d, picked);
+    if (t.getTime() > now + 60000 || Math.abs(t - ms) > 12 * 3600000) continue;
+    if (!best || Math.abs(t - ms) < Math.abs(best - ms)) best = t;
+  }
+  return best;
 }
 
 // ---- reminders ----
@@ -118,16 +348,18 @@ export const REMINDER_DAYS = 14;
  * id = 1000 + day offset * 200 + index of the time of day, so ids stay in 1000–3999.
  */
 export function reminderPlan(meds, doses, { now = Date.now(), days = REMINDER_DAYS } = {}) {
-  const times = [...new Set(meds.flatMap(m => m.times || []))].sort(), out = [];
+  const byDay = [];
   for (let i = 0; i < days; i++) {
     const date = new Date(now); date.setDate(date.getDate() + i);
-    const slots = {};
-    for (const d of dosesOn(date, meds, doses, { now })) {
-      if (d.log || d.when <= now) continue;
-      (slots[d.time] = slots[d.time] || { id: 1000 + i * 200 + times.indexOf(d.time), day: d.day, time: d.time, at: new Date(d.when), meds: [] }).meds.push(d.med);
-    }
-    out.push(...Object.values(slots));
+    byDay.push(dosesOn(date, meds, doses, { now }).filter(d => !d.log && d.when > now));
   }
+  // times counted from the last dose (9:30 after a late 9:00 dose) get their own ids too
+  const times = [...new Set(meds.flatMap(m => m.times || []).concat(byDay.flat().map(d => d.time)))].sort(), out = [];
+  byDay.forEach((list, i) => {
+    const slots = {};
+    for (const d of list) (slots[d.time] = slots[d.time] || { id: 1000 + i * 200 + times.indexOf(d.time), day: d.day, time: d.time, at: new Date(d.when), meds: [] }).meds.push(d.med);
+    out.push(...Object.values(slots));
+  });
   return out.sort((a, b) => a.at - b.at);
 }
 // Doses a reminder's "Taken" button stands for: that day's (older alarms: today's) doses at that time, not yet taken.
@@ -158,5 +390,5 @@ export function patientStatus(meds, doses, now = Date.now()) {
   const due = list.filter(d => d.status === "due");
   const taken = list.filter(d => d.status === "taken").length;
   const level = missed.length ? "missed" : due.length ? "due" : "ok";
-  return { level, missed, due, taken, total: list.length, low: lowStock(meds) };
+  return { level, missed, due, taken, total: list.length, low: lowStock(meds, doses, now) };
 }
