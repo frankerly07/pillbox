@@ -165,3 +165,20 @@ h3{font-size:1rem;font-weight:700;margin-top:4px}
 /* logged vs scheduled time */
 .well .sched{font-family:var(--f-body);font-size:.75rem;color:var(--muted);font-weight:700}
 .dose-times{margin:0}
+/* Today: keep the "Scheduled 8:00 AM" line clear of the round checkmark in the corner */
+.well .time{padding-right:30px;line-height:1.3}
+/* Today: on-time progress card */
+.progress .big-sm{font-family:var(--f-display);font-size:1.5rem;font-weight:800}
+.prog-row{display:grid;grid-template-columns:5.5em 1fr 3.2em;gap:10px;align-items:center;font-size:.9rem}
+.prog-row .mono{text-align:right}
+.badges{display:flex;flex-wrap:wrap;gap:6px}
+.badge{display:inline-flex;gap:4px;align-items:center;font-size:.82rem;font-weight:700;padding:3px 10px;border-radius:999px;background:var(--accent-soft);color:var(--ok)}
+/* calendar: selected day's doses */
+.day-list .dd{align-items:flex-start;border-left:4px solid transparent}
+.day-list .dd.taken{border-left-color:var(--ok)}
+.day-list .dd.missed{border-left-color:var(--bad);background:var(--bad-soft)}
+.day-list .dd.skipped{border-left-color:var(--line)}
+.dd-amt{font-weight:700}
+.dd-times{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.9rem}
+.ontime{color:var(--ok);font-weight:700}
+.late{color:var(--warn);font-weight:700}

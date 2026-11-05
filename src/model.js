@@ -392,3 +392,143 @@ export function patientStatus(meds, doses, now = Date.now()) {
   const level = missed.length ? "missed" : due.length ? "due" : "ok";
   return { level, missed, due, taken, total: list.length, low: lowStock(meds, doses, now) };
 }
+
+// ---- adherence progress (on-time rate, streak, badges) ----
+export const ON_TIME_WINDOW_MIN = 60;
+/** Taken within ON_TIME_WINDOW_MIN minutes (either side) of its scheduled time. */
+export const isOnTime = (d, windowMin = ON_TIME_WINDOW_MIN) =>
+  !!(d.log && d.log.status === "taken" && d.log.at && Math.abs(new Date(d.log.at).getTime() - d.when) <= windowMin * 60000);
+/**
+ * One day's scheduled doses (as-needed medicines and extra doses never count): how many, how many on time, and how
+ * many are still open (not on time, but not logged and still inside the on-time window, so they could be).
+ */
+export function dayOnTime(date, meds, doses, now = Date.now(), windowMin = ON_TIME_WINDOW_MIN) {
+  const list = dosesOn(date, meds.filter(m => !isPrn(m)), doses, { now });
+  let onTime = 0, open = 0;
+  for (const d of list) {
+    if (isOnTime(d, windowMin)) onTime++;
+    else if (!d.log && now <= d.when + windowMin * 60000) open++;
+  }
+  return { total: list.length, onTime, open, failed: list.length - onTime - open };
+}
+/** On-time rate over the last `days` days including today; doses still open are left out. pct null with nothing to count. */
+export function onTimeRate(meds, doses, days, now = Date.now()) {
+  let onTime = 0, total = 0;
+  for (let i = 0; i < days; i++) {
+    const d = new Date(now); d.setDate(d.getDate() - i);
+    const s = dayOnTime(d, meds, doses, now);
+    onTime += s.onTime; total += s.total - s.open;
+  }
+  return { onTime, total, pct: total ? Math.round(onTime / total * 100) : null };
+}
+/**
+ * Consecutive days, back from today, with every scheduled dose on time. Days with nothing scheduled are skipped.
+ * Today counts once all its doses are on time; while some are still open it neither counts nor breaks the streak.
+ */
+export function onTimeStreak(meds, doses, now = Date.now(), maxDays = 400) {
+  let streak = 0;
+  for (let i = 0; i < maxDays; i++) {
+    const d = new Date(now); d.setDate(d.getDate() - i);
+    const s = dayOnTime(d, meds, doses, now);
+    if (!s.total) continue;
+    if (s.failed) break;
+    if (s.open) continue; // only possible today (or later doses of today)
+    streak++;
+  }
+  return streak;
+}
+export const BADGES = [
+  { days: 3, emoji: "🌱", label: "3-day streak" },
+  { days: 7, emoji: "⭐", label: "1 week on time" },
+  { days: 14, emoji: "🏅", label: "2 weeks on time" },
+  { days: 30, emoji: "🏆", label: "1 month on time" },
+];
+export const badgesFor = streak => BADGES.filter(b => streak >= b.days);
+export function encouragement(streak, rate7Pct) {
+  const next = BADGES.find(b => streak < b.days);
+  if (!next) return "A whole month of on-time doses. Amazing work!";
+  const togo = next.days - streak, until = togo + (togo === 1 ? " more day" : " more days") + " to " + next.emoji + " " + next.label + ".";
+  if (streak === 0) return rate7Pct != null && rate7Pct >= 80 ? "You're doing well this week. " + until : "Every on-time dose counts. " + until;
+  return "Great job, " + streak + (streak === 1 ? " day" : " days") + " in a row! " + until;
+}
+/** Everything the Today progress card shows. */
+export function adherenceProgress(meds, doses, now = Date.now()) {
+  const rate7 = onTimeRate(meds, doses, 7, now), rate30 = onTimeRate(meds, doses, 30, now), streak = onTimeStreak(meds, doses, now);
+  return { rate7, rate30, streak, badges: badgesFor(streak), message: encouragement(streak, rate7.pct) };
+}
+
+// ---- calendar export (.ics with RRULE) ----
+const BYDAY = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+const icsLocal = d => d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + "T" + pad(d.getHours()) + pad(d.getMinutes()) + "00";
+const icsUtc = d => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+const icsText = s => String(s ?? "").replace(/\\/g, "\\\\").replace(/;/g, "\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+// Fold lines longer than 75 octets (RFC 5545 §3.1) without splitting a character.
+function icsFold(line) {
+  const enc = new TextEncoder(), out = [];
+  let cur = "", len = 0;
+  for (const ch of line) {
+    const n = enc.encode(ch).length;
+    if (len + n > (out.length ? 74 : 75)) { out.push(cur); cur = ""; len = 0; }
+    cur += ch; len += n;
+  }
+  out.push(cur);
+  return out.join("\r\n ");
+}
+/** The repeat rule for a medicine: { freq: DAILY|WEEKLY|MONTHLY, interval, byDay: [0-6], byMonthDay }. null for as-needed. */
+export function recurrenceOf(med, doses) {
+  const s = scheduleOf(med), n = Math.max(1, Math.floor(Number(s.n) || 1));
+  switch (s.kind) {
+    case "prn": return null;
+    case "weekdays": return { freq: "WEEKLY", interval: 1, byDay: [...new Set((s.days || []).map(Number))].sort() };
+    case "everyNDays": return { freq: "DAILY", interval: n };
+    case "everyNWeeks": return { freq: "WEEKLY", interval: n };
+    case "monthly": {
+      // counting from the last dose taken keeps that dose's day of the month (see addInterval)
+      const anc = doseAnchors(med, doses);
+      if (anc.length) return { freq: "MONTHLY", interval: 1, byMonthDay: anc[anc.length - 1].at.getDate() };
+      return { freq: "MONTHLY", interval: 1, byMonthDay: Math.min(31, Math.max(1, Math.floor(Number(s.dayOfMonth)) || (med.start ? parseDay(med.start).getDate() : 1))) };
+    }
+    default: return { freq: "DAILY", interval: 1 };
+  }
+}
+export function rruleOf(med, doses) {
+  const r = recurrenceOf(med, doses); if (!r) return null;
+  let rule = "FREQ=" + r.freq + (r.interval > 1 ? ";INTERVAL=" + r.interval : "");
+  if (r.byDay) rule += ";BYDAY=" + r.byDay.map(d => BYDAY[d]).join(",");
+  // days 29–31: the last day of shorter months, like the app (largest of 28..d that exists)
+  if (r.byMonthDay) rule += r.byMonthDay > 28 ? ";BYMONTHDAY=" + Array.from({ length: r.byMonthDay - 27 }, (_, i) => 28 + i).join(",") + ";BYSETPOS=-1" : ";BYMONTHDAY=" + r.byMonthDay;
+  if (med.end) rule += ";UNTIL=" + med.end.replace(/-/g, "") + "T235959";
+  return rule;
+}
+/**
+ * The first doses of a medicine's calendar series: its next scheduled day from today on (interval schedules count from
+ * the last dose taken), one entry per time of day. [] for as-needed or when nothing is scheduled in the next ~13 months.
+ */
+export function calendarStarts(med, doses = {}, now = Date.now()) {
+  const m = normalizeMed(med);
+  if (isPrn(m)) return [];
+  for (let i = 0; i < 400; i++) {
+    const date = new Date(now); date.setDate(date.getDate() + i); date.setHours(12, 0, 0, 0);
+    if (m.end && dayKey(date) > m.end) return [];
+    const list = scheduledOn(m, date, doses);
+    if (list.length) return list.map(x => ({ time: x.slot, start: new Date(x.when) }));
+  }
+  return [];
+}
+export const calendarTitle = med => typeIcon(med) + " " + [med.name, med.strength].filter(Boolean).join(" ") + " (" + doseLabel(med) + ")";
+/** An .ics file with one repeating event per time of day. "" for as-needed medicines. */
+export function medToIcs(med, doses = {}, now = Date.now()) {
+  const starts = calendarStarts(med, doses, now), rule = rruleOf(med, doses);
+  if (!starts.length || !rule) return "";
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Pillbox//Medicine schedule//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"];
+  for (const { time, start } of starts) {
+    const end = new Date(start.getTime() + 15 * 60000);
+    lines.push("BEGIN:VEVENT", "UID:" + med.id + "-" + time.replace(":", "") + "@pillbox", "DTSTAMP:" + icsUtc(new Date(now)),
+      "DTSTART:" + icsLocal(start), "DTEND:" + icsLocal(end), "RRULE:" + rule,
+      "SUMMARY:" + icsText(calendarTitle(med)),
+      "DESCRIPTION:" + icsText("Take " + doseLabel(med) + " (" + scheduleLabel(med) + ")." + (med.notes ? " " + med.notes : "")),
+      "END:VEVENT");
+  }
+  lines.push("END:VCALENDAR");
+  return lines.map(icsFold).join("\r\n") + "\r\n";
+}
