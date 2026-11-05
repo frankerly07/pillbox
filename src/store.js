@@ -1,7 +1,7 @@
 // Data layer. Both stores have the same interface, so the UI doesn't care which one runs.
 //   LocalStore: everything on this phone (no account, no caregiver sync). Used until Firebase is set up.
 //   CloudStore: Firebase Auth + Firestore, shared between the patient's and caregivers' phones.
-import { uid, dayKey, doseKey, COLORS, normalizeMed, scheduledOn, anchorsToLastDose, doseAnchors } from "./model.js";
+import { uid, dayKey, doseKey, COLORS, normalizeMed, normalizeEvent, scheduledOn, anchorsToLastDose, doseAnchors } from "./model.js";
 import { firebaseConfig } from "./firebase-config.js";
 
 const listeners = () => new Set();
@@ -38,21 +38,21 @@ export class LocalStore {
     try { data = JSON.parse(localStorage.getItem(LKEY)); } catch (e) {}
     if (!data || data.role !== role) data = this.seed(role);
     // Medicines saved before types and schedules existed become daily pills (or as-needed); nothing is dropped.
-    for (const p of Object.values(data.patients || {})) p.meds = (p.meds || []).map(normalizeMed);
+    for (const p of Object.values(data.patients || {})) { p.meds = (p.meds || []).map(normalizeMed); p.events = p.events || {}; }
     this.data = data;
     this.user = { uid: "local", name: role === "caregiver" ? "You" : "Me", role };
   }
   seed(role) {
     if (role === "patient") {
-      return { role, example: true, patients: { me: { id: "me", name: "Me", meds: sampleMeds(), doses: {}, stockLog: [], caregivers: [] } } };
+      return { role, example: true, patients: { me: { id: "me", name: "Me", meds: sampleMeds(), doses: {}, events: {}, stockLog: [], caregivers: [] } } };
     }
     const ago = new Date(); ago.setDate(ago.getDate() - 20); const st = dayKey(ago);
     const a = sampleMeds(st).slice(0, 2), b = [{ id: uid(), name: "Lisinopril", strength: "10 mg", perDose: "1 tablet", times: ["09:00"], stock: 4, refillAt: 7, color: COLORS[3] }, { id: uid(), name: "Atorvastatin", strength: "20 mg", perDose: "1 tablet", times: ["21:00"], stock: 25, refillAt: 7, color: COLORS[4] }].map(m => normalizeMed({ ...m, start: st }));
     return {
       role, example: true, patients: {
-        p1: { id: "p1", name: "Example: Maria", meds: a, doses: sampleHistory(a, 0.08), caregivers: ["local"],
+        p1: { id: "p1", name: "Example: Maria", meds: a, doses: sampleHistory(a, 0.08), events: {}, caregivers: ["local"],
           stockLog: [{ id: uid(), medId: a[1].id, delta: 60, after: 60, reason: "refill", note: "Rx renewed", by: "caregiver", byName: "Dr. Patel (example)", at: new Date(Date.now() - 18 * 86400000).toISOString() }] },
-        p2: { id: "p2", name: "Example: Joe", meds: b, doses: sampleHistory(b, 0.25), caregivers: ["local"] },
+        p2: { id: "p2", name: "Example: Joe", meds: b, doses: sampleHistory(b, 0.25), events: {}, caregivers: ["local"] },
       }
     };
   }
@@ -65,7 +65,7 @@ export class LocalStore {
   }
   patientList() { return Object.values(this.data.patients).map(p => ({ id: p.id, name: p.name })); }
   get example() { return !!this.data.example; }
-  clearExamples() { this.data = this.role === "patient" ? { role: "patient", example: false, patients: { me: { id: "me", name: "Me", meds: [], doses: {}, caregivers: [] } } } : { role: "caregiver", example: false, patients: {} }; this.persist(); for (const id of this.subs.keys()) this.emit(id); for (const cb of this.listSubs) cb(this.patientList()); }
+  clearExamples() { this.data = this.role === "patient" ? { role: "patient", example: false, patients: { me: { id: "me", name: "Me", meds: [], doses: {}, events: {}, caregivers: [] } } } : { role: "caregiver", example: false, patients: {} }; this.persist(); for (const id of this.subs.keys()) this.emit(id); for (const cb of this.listSubs) cb(this.patientList()); }
   async init() { return this.user; }
   onAuth(cb) { cb(this.user); return () => {}; }
   listPatients(cb) { this.listSubs.add(cb); cb(this.patientList()); return () => this.listSubs.delete(cb); }
@@ -79,6 +79,8 @@ export class LocalStore {
   async deleteMed(pid, medId) { const p = this.data.patients[pid]; p.meds = p.meds.filter(m => m.id !== medId); this.emit(pid); }
   async setDose(pid, key, dose) { this.data.patients[pid].doses[key] = dose; this.emit(pid); }
   async clearDose(pid, key) { delete this.data.patients[pid].doses[key]; this.emit(pid); }
+  async saveEvent(pid, ev) { ev = normalizeEvent(ev); const p = this.data.patients[pid]; (p.events = p.events || {})[ev.id] = ev; this.emit(pid); }
+  async deleteEvent(pid, id) { const p = this.data.patients[pid]; if (p.events) delete p.events[id]; this.emit(pid); }
   async adjustStock(pid, medId, delta, ev = {}) {
     const p = this.data.patients[pid], m = p.meds.find(x => x.id === medId);
     if (!m || typeof m.stock !== "number") return;
@@ -142,7 +144,7 @@ export class CloudStore {
   }
   watchPatient(pid, cb) {
     const { doc, collection, query, where, orderBy, startAfter, limit, getDocs, onSnapshot } = this.F;
-    const state = { id: pid, name: "", meds: [], doses: {}, stockLog: [], caregivers: [], caregiverNames: {} };
+    const state = { id: pid, name: "", meds: [], doses: {}, events: {}, stockLog: [], caregivers: [], caregiverNames: {} };
     const got = new Set(); const push = k => { got.add(k); if (got.has("p") && got.has("m") && got.has("d")) cb(structuredClone(state)); };
     const since = new Date(); since.setDate(since.getDate() - 120);
     const doses = collection(this.db, "patients", pid, "doses");
@@ -167,6 +169,8 @@ export class CloudStore {
       onSnapshot(doc(this.db, "patients", pid), s => { Object.assign(state, s.data() || {}); state.id = pid; push("p"); }),
       onSnapshot(collection(this.db, "patients", pid, "meds"), s => { state.meds = s.docs.map(d => normalizeMed({ ...d.data(), id: d.id })); sync("m"); }),
       onSnapshot(query(doses, where("day", ">=", dayKey(since))), s => { recent = Object.fromEntries(s.docs.map(d => [d.id, d.data()])); sync("d"); }),
+      // health events: same 120-day window as doses, keyed by id
+      onSnapshot(query(collection(this.db, "patients", pid, "events"), where("day", ">=", dayKey(since))), s => { state.events = Object.fromEntries(s.docs.map(d => [d.id, normalizeEvent({ ...d.data(), id: d.id })])); push("e"); }),
       onSnapshot(query(collection(this.db, "patients", pid, "stock"), where("at", ">=", since.toISOString())), s => { state.stockLog = s.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => a.at.localeCompare(b.at)); push("s"); }),
     ];
     return () => unsubs.forEach(u => u());
@@ -175,6 +179,8 @@ export class CloudStore {
   async deleteMed(pid, medId) { const { doc, deleteDoc } = this.F; await deleteDoc(doc(this.db, "patients", pid, "meds", medId)); }
   async setDose(pid, key, dose) { const { doc, setDoc } = this.F; await setDoc(doc(this.db, "patients", pid, "doses", key), dose); }
   async clearDose(pid, key) { const { doc, deleteDoc } = this.F; await deleteDoc(doc(this.db, "patients", pid, "doses", key)); }
+  async saveEvent(pid, ev) { const { doc, setDoc } = this.F; const { id, ...rest } = normalizeEvent(ev); await setDoc(doc(this.db, "patients", pid, "events", id), { ...rest, updatedBy: this.user.uid }); }
+  async deleteEvent(pid, id) { const { doc, deleteDoc } = this.F; await deleteDoc(doc(this.db, "patients", pid, "events", id)); }
   async adjustStock(pid, medId, delta, ev = {}) {
     const { doc, collection, writeBatch, increment } = this.F;
     const b = writeBatch(this.db);

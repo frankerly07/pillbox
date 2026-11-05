@@ -182,3 +182,19 @@ h3{font-size:1rem;font-weight:700;margin-top:4px}
 .dd-times{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.9rem}
 .ontime{color:var(--ok);font-weight:700}
 .late{color:var(--warn);font-weight:700}
+/* health events */
+.overlay .panel{max-height:92vh;overflow-y:auto}
+.log-event{width:100%;min-height:56px;font-size:1.05rem;border:2px dashed var(--accent);color:var(--accent);background:var(--surface);border-radius:18px}
+.ev-types{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ev-type{min-height:64px;border-radius:16px;font-size:1.05rem;justify-content:flex-start;text-align:left}
+.ev-types .ev-type:last-child:nth-child(odd){grid-column:1 / -1}
+.tog{min-height:40px;padding:6px 12px;font-size:.9rem}
+.tog[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.lbl{font-weight:700;font-size:.92rem}
+textarea{resize:vertical}
+.ev-item{border-left:4px solid var(--line)}
+.ev-item.ev-bleed{border-left-color:var(--bad)}
+.ev-item.ev-sideEffect{border-left-color:var(--warn)}
+.ev-notes{font-size:.92rem;overflow-wrap:anywhere}
+.cal-day{position:relative}
+.cal-day .ev-dot{position:absolute;top:5px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--bad)}

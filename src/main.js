@@ -18,7 +18,9 @@ const S = {
 function loadSettings() { try { return { dueWindowMin: 60, ...JSON.parse(localStorage.getItem("pillbox.settings") || "{}") }; } catch (e) { return { dueWindowMin: 60 }; } }
 function saveSettings() { try { localStorage.setItem("pillbox.settings", JSON.stringify(S.settings)); } catch (e) {} }
 const opts = () => ({ now: Date.now(), dueWindowMin: S.settings.dueWindowMin });
-const snap = (pid = S.pid) => S.snaps[pid] || { meds: [], doses: {}, name: "" };
+const snap = (pid = S.pid) => S.snaps[pid] || { meds: [], doses: {}, events: {}, name: "" };
+// Background redraws (new data, 30 s tick) wait while a form is open, so typing and focus aren't lost.
+const busy = () => !!(S.editing || S.sheet?.ev);
 const isCare = () => S.role === "caregiver";
 
 // ---------------- actions ----------------
@@ -150,6 +152,54 @@ function progressCard(pid) {
     <div class="muted">${esc(a.message)}</div></section>`;
 }
 
+// ---------------- health events ----------------
+// S.sheet = { pid, ev: draft, evId? (editing), confirmDelete?, error? }. The draft keeps the time as a datetime-local
+// string (atLocal) and is copied from the form on every input, so redraws don't lose what was typed.
+const localInput = d => dayKey(d) + "T" + M.hm(d);
+const newEventSheet = pid => ({ pid, ev: { type: null, area: "", severity: null, cause: null, durationMin: "", treatedWith: "", notes: "", atLocal: localInput(new Date()) } });
+function editEventSheet(pid, id) {
+  const e = (snap(pid).events || {})[id]; if (!e) return null;
+  return { pid, evId: id, ev: { ...e, area: e.area || "", durationMin: e.durationMin ?? "", treatedWith: e.treatedWith || "", atLocal: localInput(new Date(e.at)) } };
+}
+function readEventForm() {
+  const f = document.getElementById("evform"); if (!f || !S.sheet?.ev) return;
+  const fd = new FormData(f);
+  for (const k of ["area", "durationMin", "treatedWith", "notes", "atLocal"]) if (fd.has(k)) S.sheet.ev[k] = fd.get(k);
+}
+document.addEventListener("input", e => { if (e.target.closest("#evform")) readEventForm(); });
+function eventItem(pid, e) {
+  const p = snap(pid), t = M.EVENT_TYPES[e.type] || M.EVENT_TYPES.other, dose = e.treatedWith && p.doses[e.treatedWith];
+  const who = [e.by === "caregiver" ? "Logged by " + (e.byName || "caregiver") : "", e.editedBy && e.editedByName && e.editedByName !== e.byName ? "edited by " + e.editedByName : ""].filter(Boolean).join(", ");
+  return `<button class="item item-btn ev-item ev-${esc(e.type)}" data-act="ev-open" data-pid="${pid}" data-id="${esc(e.id)}"><div class="stack-tight" style="min-width:0;flex:1">
+    <div><span aria-hidden="true">${t.icon}</span> <strong>${esc(M.eventLabel(e))}</strong></div>
+    <div class="muted small"><span class="mono">${fmtClock(e.at)}</span>${dose ? " · Treated with " + esc(M.doseLinkLabel(dose, p.meds)) : ""}</div>
+    ${e.notes ? `<div class="ev-notes">${esc(e.notes)}</div>` : ""}${who ? `<div class="muted small">${esc(who)}</div>` : ""}</div><span class="chev" aria-hidden="true">›</span></button>`;
+}
+const eventList = (pid, list) => `<div class="list">${list.map(e => eventItem(pid, e)).join("")}</div>`;
+function eventSheet() {
+  const sh = S.sheet, ev = sh.ev, p = snap(sh.pid), now = new Date();
+  if (!ev.type) return `<div class="eyebrow">Log event</div><h2>What happened?</h2>
+    <div class="ev-types">${Object.entries(M.EVENT_TYPES).map(([k, t]) => `<button class="ev-type" data-act="ev-type" data-type="${k}"><span aria-hidden="true">${t.icon}</span> ${esc(t.label)}</button>`).join("")}</div>
+    <button data-act="close-sheet">Cancel</button>`;
+  const toggles = (act, map, sel) => Object.entries(map).map(([k, l]) => `<button type="button" class="tog" data-act="${act}" data-v="${k}" aria-pressed="${String(sel) === k}">${esc(l)}</button>`).join("");
+  const links = M.recentDosesForLink(p.meds, p.doses);
+  if (ev.treatedWith && !links.some(x => x.key === ev.treatedWith))
+    links.push({ key: ev.treatedWith, label: p.doses[ev.treatedWith] ? M.doseLinkLabel(p.doses[ev.treatedWith], p.meds) : "Earlier dose (no longer logged)" });
+  return `<form class="stack" id="evform"><div class="eyebrow">${sh.evId ? "Edit event" : "Log event"}</div>
+    <div class="opts" role="group" aria-label="Type of event">${Object.entries(M.EVENT_TYPES).map(([k, t]) => `<button type="button" class="tog" data-act="ev-type" data-type="${k}" aria-pressed="${ev.type === k}"><span aria-hidden="true">${t.icon}</span> ${esc(t.label)}</button>`).join("")}</div>
+    <div class="field"><label for="ev-area">Where (optional)</label><select id="ev-area" name="area"><option value="">Not set</option>${Object.entries(M.BODY_AREAS).map(([k, l]) => opt(k, l, ev.area)).join("")}</select></div>
+    <div class="field"><div class="lbl" id="ev-sev-l">How bad (optional)</div><div class="opts" role="group" aria-labelledby="ev-sev-l">${toggles("ev-sev", M.SEVERITIES, ev.severity)}</div></div>
+    ${ev.type === "bleed" ? `<div class="field"><div class="lbl" id="ev-cause-l">Cause (optional)</div><div class="opts" role="group" aria-labelledby="ev-cause-l">${toggles("ev-cause", M.BLEED_CAUSES, ev.cause)}</div></div>` : ""}
+    ${ev.type === "activity" ? `<div class="field"><label for="ev-dur">How long (optional)</label><div class="amount"><input id="ev-dur" name="durationMin" type="number" min="1" max="1440" inputmode="numeric" value="${esc(ev.durationMin)}"><span>minutes</span></div></div>` : ""}
+    <div class="field"><label for="ev-tx">Treated with (optional)</label><select id="ev-tx" name="treatedWith"><option value="">Nothing / not yet</option>${links.map(x => opt(x.key, x.label, ev.treatedWith)).join("")}</select>
+      ${links.length ? "" : `<div class="muted small">No doses taken in the last 48 hours.</div>`}</div>
+    <div class="field"><label for="ev-notes">Notes (optional)</label><textarea id="ev-notes" name="notes" rows="2" placeholder="e.g. Swelling after football">${esc(ev.notes)}</textarea></div>
+    <div class="field"><label for="ev-at">When</label><input id="ev-at" name="atLocal" type="datetime-local" required max="${localInput(now)}" value="${esc(ev.atLocal)}"></div>
+    ${sh.error ? `<div class="banner dup">${esc(sh.error)}</div>` : ""}
+    <div class="row spread"><div class="row"><button class="btn-primary" type="submit">Save</button><button type="button" data-act="close-sheet">Cancel</button></div>
+      ${sh.evId ? `<button type="button" class="btn-danger btn-sm" data-act="ev-delete">${sh.confirmDelete ? "Tap again to delete" : "Delete"}</button>` : ""}</div></form>`;
+}
+
 function todayBlock(pid) {
   const p = snap(pid), now = new Date(), list = M.dosesOn(now, p.meds, p.doses, opts());
   const groupDue = list.filter(d => (d.status === "due" || d.status === "missed") && !d.log);
@@ -169,6 +219,9 @@ function todayBlock(pid) {
       <div style="text-align:right"><div class="eyebrow">Taken</div><div class="big mono">${taken}/${list.length}</div></div></div></section>`;
   }
   if (!isCare()) h += progressCard(pid);
+  const evs = M.eventsOn(now, p.events);
+  h += `<section class="stack"><button class="log-event" data-act="ev-new" data-pid="${pid}"><span aria-hidden="true">＋</span> Log event</button>
+    ${evs.length ? `<h2>Today's events</h2>${eventList(pid, evs)}` : ""}</section>`;
   h += `<section class="stack"><h2>Today's doses</h2>`;
   h += list.length ? wells(pid, list) : `<p class="muted">${isCare() ? "No scheduled doses today." : "Add a medicine with times and it shows up here."}</p>`;
   h += `</section>`;
@@ -196,11 +249,11 @@ function calendarBlock(pid) {
   let cells = "";
   for (let i = 0; i < first.getDay(); i++) cells += `<span></span>`;
   for (let d = 1; d <= days; d++) {
-    const date = new Date(y, m, d), k = dayKey(date), s = M.daySummary(date, p.meds, p.doses, opts());
-    cells += `<button class="cal-day ${s.state}${k === sel ? " sel" : ""}${k === todayK ? " today" : ""}" data-act="cal-sel" data-day="${k}" aria-label="${date.toDateString()}: ${s.taken} of ${s.total} taken"><span>${d}</span>${s.total && date <= new Date() ? `<i>${s.taken}/${s.total}</i>` : ""}</button>`;
+    const date = new Date(y, m, d), k = dayKey(date), s = M.daySummary(date, p.meds, p.doses, opts()), ne = M.eventsOn(date, p.events).length;
+    cells += `<button class="cal-day ${s.state}${k === sel ? " sel" : ""}${k === todayK ? " today" : ""}" data-act="cal-sel" data-day="${k}" aria-label="${date.toDateString()}: ${s.taken} of ${s.total} taken${ne ? ", " + ne + (ne === 1 ? " event" : " events") : ""}"><span>${d}</span>${s.total && date <= new Date() ? `<i>${s.taken}/${s.total}</i>` : ""}${ne ? `<b class="ev-dot" aria-hidden="true"></b>` : ""}</button>`;
   }
   const selDate = M.parseDay(sel), sum = M.daySummary(selDate, p.meds, p.doses, opts());
-  const extras = Object.entries(p.doses).filter(([, v]) => v.extra && v.day === sel);
+  const extras = Object.entries(p.doses).filter(([, v]) => v.extra && v.day === sel), dayEvents = M.eventsOn(selDate, p.events);
   const ad = M.adherence(p.meds, p.doses, 30);
   return `<section class="stack">
     <div class="row spread"><button class="btn-sm" data-act="cal-prev" aria-label="Previous month">‹</button><h2>${esc(title)}</h2><button class="btn-sm" data-act="cal-next" aria-label="Next month">›</button></div>
@@ -216,6 +269,7 @@ function calendarBlock(pid) {
         ${d.log && (d.log.by === "caregiver" || d.log.source === "pillbox") ? `<div class="muted small">${d.log.by === "caregiver" ? "Logged by " + esc(d.log.byName || "caregiver") : ""}${d.log.by === "caregiver" && d.log.source === "pillbox" ? " · " : ""}${d.log.source === "pillbox" ? "From pillbox" : ""}</div>` : ""}</div>
       ${d.log ? `<button class="btn-sm" data-act="undo" data-pid="${pid}" data-key="${d.key}">Undo</button>` : d.status !== "upcoming" ? `<button class="btn-sm btn-primary" data-act="open-sheet" data-pid="${pid}" data-key="${d.key}">Log…</button>` : ""}</div>`).join("")
       + extras.map(([k, v]) => { const med = p.meds.find(x => x.id === v.medId); return `<div class="item dd taken"><div class="stack-tight"><div>${med ? `<span aria-hidden="true">${M.typeIcon(med)}</span> ` : ""}<strong>${esc(med ? med.name : "Medicine")}</strong> ${esc(med?.strength || "")} <span class="chip taken">extra</span></div>${med ? `<div class="dd-amt">${esc(M.doseLabel(med))}</div>` : ""}<div class="dd-times"><span>As needed</span><span>Taken <strong class="mono">${fmtClock(v.at)}</strong></span></div></div><button class="btn-sm" data-act="open-sheet" data-pid="${pid}" data-key="${k}">Details</button></div>`; }).join("") + `</div>` : `<p class="muted">Nothing scheduled.</p>`}
+    ${dayEvents.length ? `<h3>Events</h3>${eventList(pid, dayEvents)}` : ""}
   </section>`;
 }
 
@@ -366,12 +420,12 @@ function caregiverView() {
   // patient list
   const cards = S.patients.map(pt => {
     const p = S.snaps[pt.id]; if (!p) return `<div class="pcard"><strong>${esc(pt.name)}</strong><div class="muted">Loading…</div></div>`;
-    const st = M.patientStatus(p.meds, p.doses, Date.now()), ad = M.adherence(p.meds, p.doses, 7);
+    const st = M.patientStatus(p.meds, p.doses, Date.now()), ad = M.adherence(p.meds, p.doses, 7), ne = M.eventsOn(new Date(), p.events).length;
     const msg = st.missed.length ? st.missed.map(d => d.med.name + " " + fmtTime(d.time)).join(", ") + " not taken" : st.due.length ? st.due.map(d => d.med.name).join(", ") + " due now" : st.total ? "On track today" : "Nothing scheduled today";
     return `<button class="pcard ${st.level}" data-act="open" data-pid="${pt.id}">
       <div class="row spread" style="flex-wrap:nowrap"><strong class="pname">${esc(p.name)}</strong><span class="chip ${st.level === "ok" ? "taken" : st.level}">${st.level === "ok" ? "OK" : st.level}</span></div>
       <div>${esc(msg)}</div>
-      <div class="row muted small"><span>Today ${st.taken}/${st.total}</span><span>7-day ${ad.pct ?? "–"}${ad.pct != null ? "%" : ""}</span>${st.low.length ? `<span class="stock-low">Refill: ${st.low.map(m => esc(m.name)).join(", ")}</span>` : ""}</div></button>`;
+      <div class="row muted small"><span>Today ${st.taken}/${st.total}</span><span>7-day ${ad.pct ?? "–"}${ad.pct != null ? "%" : ""}</span>${ne ? `<span>${ne} ${ne === 1 ? "event" : "events"} today</span>` : ""}${st.low.length ? `<span class="stock-low">Refill: ${st.low.map(m => esc(m.name)).join(", ")}</span>` : ""}</div></button>`;
   }).join("");
   return header("Patients", new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })) + `<div class="stack">${alertBanner()}${exampleBanner()}
     ${S.patients.length ? `<div class="stack">${cards}</div>` : `<div class="sheet"><h2>No patients yet</h2><p class="muted">Link a patient with the 6-digit code from their Pillbox app.</p></div>`}
@@ -403,7 +457,9 @@ function render() {
   $nav.hidden = false;
   const items = NAV[S.role];
   $nav.innerHTML = `<div class="in" style="grid-template-columns:repeat(${items.length},1fr)">` + items.map(([k, l]) => `<a href="#${k}" ${S.view === k || (k === "patients" && S.view === "today") ? 'aria-current="page"' : ""}>${l}</a>`).join("") + `</div>`;
+  const scroll = document.querySelector(".overlay .panel")?.scrollTop;
   $app.innerHTML = (isCare() ? caregiverView() : patientView()) + sheetView();
+  const panel = scroll && document.querySelector(".overlay .panel"); if (panel) panel.scrollTop = scroll;
 }
 // Dose sheet. S.sheet = { pid, key } for one dose, or { pid, time, group: true } for "Taken earlier?" on the
 // take-all button. `edit` shows the time picker (late logging, or changing a taken dose's time).
@@ -417,6 +473,7 @@ function sheetView() {
   if (!S.sheet) return "";
   const { pid, key } = S.sheet, p = snap(pid);
   const wrap = body => `<div class="overlay" data-act="close-sheet"><div class="panel" role="dialog" aria-label="Dose details">${body}<button class="btn-quiet" data-act="close-sheet">Close</button></div></div>`;
+  if (S.sheet.ev) return `<div class="overlay" data-act="close-sheet"><div class="panel" role="dialog" aria-label="${S.sheet.evId ? "Edit event" : "Log event"}">${eventSheet()}</div></div>`;
   if (S.sheet.group) {
     const list = M.dosesOn(new Date(), p.meds, p.doses, opts()).filter(d => d.time === S.sheet.time && !d.log);
     if (!list.length) { S.sheet = null; return ""; }
@@ -535,6 +592,14 @@ document.addEventListener("click", async e => {
       case "open-sheet": S.sheet = { pid, key: el.dataset.key }; break;
       case "edit-time": S.sheet = { pid, key: el.dataset.key, edit: true }; document.getElementById("toast").hidden = true; break;
       case "edit-cancel": if (S.sheet) { S.sheet.edit = false; S.sheet.error = ""; if (S.sheet.group) S.sheet = null; } break;
+      case "ev-new": S.sheet = newEventSheet(pid); break;
+      case "ev-open": S.sheet = editEventSheet(pid, el.dataset.id); break;
+      case "ev-type": readEventForm(); S.sheet.ev.type = el.dataset.type; break;
+      case "ev-sev": readEventForm(); S.sheet.ev.severity = S.sheet.ev.severity === Number(el.dataset.v) ? null : Number(el.dataset.v); break;
+      case "ev-cause": readEventForm(); S.sheet.ev.cause = S.sheet.ev.cause === el.dataset.v ? null : el.dataset.v; break;
+      case "ev-delete":
+        readEventForm(); if (!S.sheet.confirmDelete) { S.sheet.confirmDelete = true; break; }
+        await S.store.deleteEvent(S.sheet.pid, S.sheet.evId); S.sheet = null; toast("Event deleted"); break;
       case "earlier-group": S.sheet = { pid, time: el.dataset.time, group: true }; break;
       case "clear-examples": S.store.clearExamples(); S.snaps = {}; if (!isCare()) S.pid = "me"; break;
       case "cal-prev": S.cal.m--; if (S.cal.m < 0) { S.cal.m = 11; S.cal.y--; } break;
@@ -607,6 +672,16 @@ document.addEventListener("submit", async e => {
       if (list[0].log) { await setDoseTime(sh.pid, list[0].key, when); toast("Changed to " + label); }
       else { for (const d of list) await takeDose(sh.pid, d, "app", when); toast((list.length === 1 ? list[0].med.name : list.length + " doses") + " " + label); }
       S.sheet = null;
+    } else if (f.id === "evform") {
+      readEventForm(); const sh = S.sheet, ev = sh.ev, when = new Date(ev.atLocal); // datetime-local: local time
+      if (isNaN(when.getTime())) { sh.error = "Pick when it happened."; render(); return; }
+      if (when.getTime() > Date.now() + 60000) { sh.error = "That time hasn't happened yet."; render(); return; }
+      const was = sh.evId ? (snap(sh.pid).events || {})[sh.evId] : null, name = S.user?.name || "";
+      // the first person to log it stays its author; later changes say who edited
+      const rec = { ...(was || {}), ...ev, id: sh.evId || M.uid(), at: when, updatedAt: Date.now(),
+        ...(was ? { editedBy: S.role, editedByName: name } : { by: S.role, byName: name, createdAt: Date.now() }) };
+      await S.store.saveEvent(sh.pid, rec);
+      S.sheet = null; toast(was ? "Event saved" : M.EVENT_TYPES[rec.type].label + " logged");
     } else if (f.id === "stockform") {
       const fd = new FormData(f), n = Number(fd.get("n")), note = (fd.get("note") || "").trim();
       const m = snap().meds.find(x => x.id === S.medDetail); if (!m || !(n >= 0)) return;
@@ -649,7 +724,7 @@ function onSnap(pid, data) {
     N.scheduleCaregiverChecks(Object.values(S.snaps), S.settings.dueWindowMin).catch(() => {});
     checkMissed();
   }
-  if (!S.editing) render();
+  if (!busy()) render();
 }
 function checkMissed() {
   if (!isCare()) return;
@@ -676,7 +751,7 @@ async function onReminderAction(a) {
     for (const d of list) await takeDose(pid, d, "reminder");
     if (list.length) toast("Marked taken from the reminder");
   } catch (err) { toast(err.message || String(err)); }
-  if (!S.editing) render();
+  if (!busy()) render();
 }
 let actionRun = Promise.resolve();
 function runQueuedReminderActions() {
@@ -697,7 +772,7 @@ async function afterLogin() {
   wirePatients();
   // Permission check must never block the first paint (native plugin awaits can hang).
   try { S.perm = await N.reminderPermission(); } catch (e) { S.perm = "unsupported"; }
-  if (!S.editing) render();
+  if (!busy()) render();
 }
 
 async function boot() {
@@ -715,10 +790,10 @@ async function boot() {
   route();
   N.setupNotifications(onReminderAction).catch(() => {});
   if (S.user) {
-    N.reminderPermission().then(p => { S.perm = p; if (!S.editing) render(); }).catch(() => { S.perm = "unsupported"; if (!S.editing) render(); });
+    N.reminderPermission().then(p => { S.perm = p; if (!busy()) render(); }).catch(() => { S.perm = "unsupported"; if (!busy()) render(); });
   }
-  setInterval(() => { checkMissed(); if (!S.editing && !document.querySelector("input:focus")) render(); }, 30000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && !S.editing) render(); });
+  setInterval(() => { checkMissed(); if (!busy() && !document.querySelector("input:focus")) render(); }, 30000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && !busy()) render(); });
   window.Pillbox = { lidOpened, state: S };
 }
 boot();

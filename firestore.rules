@@ -45,7 +45,7 @@ service cloud.firestore {
       );
 
       match /{sub}/{id} {
-        allow read, write: if (sub == "meds" || sub == "doses" || sub == "stock") && member(pid);
+        allow read, write: if (sub == "meds" || sub == "doses" || sub == "stock" || sub == "events") && member(pid);
       }
     }
   }
