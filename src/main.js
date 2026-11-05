@@ -508,7 +508,7 @@ function runQueuedReminderActions() {
   if (!S.pid || !S.snaps[S.pid]) return;
   for (const a of queuedActions.splice(0)) actionRun = actionRun.then(() => onReminderAction(a));
 }
-async function afterLogin() {
+function wirePatients() {
   listUnsub && listUnsub();
   listUnsub = S.store.listPatients(list => {
     S.patients = list;
@@ -517,20 +517,31 @@ async function afterLogin() {
     if (!isCare()) { S.pid = list[0]?.id || null; runQueuedReminderActions(); }
     render();
   });
-  S.perm = await N.reminderPermission().catch(() => "unsupported");
+}
+async function afterLogin() {
+  wirePatients();
+  // Permission check must never block the first paint (native plugin awaits can hang).
+  try { S.perm = await N.reminderPermission(); } catch (e) { S.perm = "unsupported"; }
+  if (!S.editing) render();
 }
 
 async function boot() {
-  S.role = await N.detectRole();
+  try { S.role = await N.detectRole(); } catch (e) { S.role = "patient"; }
   document.title = isCare() ? "Pillbox Care" : "Pillbox";
   document.documentElement.dataset.role = S.role;
   S.store = makeStore(S.role);
   window.addEventListener("hashchange", route);
   $app.innerHTML = `<p class="muted" style="padding-top:40px">Loading…</p>`;
   try { S.user = await S.store.init(); } catch (e) { $app.innerHTML = `<div class="banner dup">Couldn't start: ${esc(e.message)}</div>`; return; }
-  await N.setupNotifications(onReminderAction).catch(() => {});
-  if (S.user) await afterLogin();
+  // Paint the UI before any alarm/permission/native work. A hung Capacitor call must not
+  // leave the app stuck on "Loading…".
+  if (S.user) wirePatients();
+  else render();
   route();
+  N.setupNotifications(onReminderAction).catch(() => {});
+  if (S.user) {
+    N.reminderPermission().then(p => { S.perm = p; if (!S.editing) render(); }).catch(() => { S.perm = "unsupported"; if (!S.editing) render(); });
+  }
   setInterval(() => { checkMissed(); if (!S.editing && !document.querySelector("input:focus")) render(); }, 30000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden && !S.editing) render(); });
   window.Pillbox = { lidOpened, state: S };
