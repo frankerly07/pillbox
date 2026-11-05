@@ -532,3 +532,76 @@ export function medToIcs(med, doses = {}, now = Date.now()) {
   lines.push("END:VCALENDAR");
   return lines.map(icsFold).join("\r\n") + "\r\n";
 }
+
+// ---- health events (bleeds, side effects, symptoms, activity) ----
+export const EVENT_TYPES = {
+  bleed: { label: "Bleed", icon: "🩸" },
+  sideEffect: { label: "Side effect", icon: "⚠️" },
+  symptom: { label: "Symptom", icon: "🤒" },
+  activity: { label: "Activity", icon: "🏃" },
+  other: { label: "Other", icon: "📝" },
+};
+export const BODY_AREAS = {
+  leftKnee: "Left knee", rightKnee: "Right knee", leftAnkle: "Left ankle", rightAnkle: "Right ankle",
+  leftElbow: "Left elbow", rightElbow: "Right elbow", leftHip: "Left hip", rightHip: "Right hip",
+  leftShoulder: "Left shoulder", rightShoulder: "Right shoulder", leftWrist: "Left wrist", rightWrist: "Right wrist",
+  leftHand: "Left hand", rightHand: "Right hand", leftFoot: "Left foot", rightFoot: "Right foot",
+  head: "Head", mouth: "Mouth / gums", nose: "Nose",
+  muscleThigh: "Muscle (thigh)", muscleCalf: "Muscle (calf)", muscleArm: "Muscle (arm)",
+  stomach: "Stomach", other: "Other",
+};
+export const SEVERITIES = { 1: "Mild", 2: "Moderate", 3: "Severe" };
+export const BLEED_CAUSES = { spontaneous: "Spontaneous", injury: "Injury", unknown: "Unknown" };
+
+const str = v => (typeof v === "string" ? v.trim() : "");
+/**
+ * A clean event record: a known type (else "other"), `at` as an ISO time (invalid → now) and its local `day`,
+ * a known body area, severity 1–3, cause (bleeds only), whole minutes of duration (activity only), the dose key
+ * it was treated with, and trimmed notes. Anything not set is null. Who logged / edited it is kept.
+ */
+export function normalizeEvent(e = {}, now = Date.now()) {
+  const type = EVENT_TYPES[e.type] ? e.type : "other";
+  let t = e.at instanceof Date ? e.at.getTime() : typeof e.at === "number" ? e.at : Date.parse(e.at);
+  if (!Number.isFinite(t)) t = now;
+  const d = new Date(t), sev = Number(e.severity), dur = Math.round(Number(e.durationMin));
+  const out = {
+    id: str(e.id) || uid(), type, at: d.toISOString(), day: dayKey(d),
+    area: BODY_AREAS[e.area] ? e.area : null,
+    severity: Number.isInteger(sev) && sev >= 1 && sev <= 3 ? sev : null,
+    cause: type === "bleed" && BLEED_CAUSES[e.cause] ? e.cause : null,
+    durationMin: type === "activity" && e.durationMin !== "" && e.durationMin != null && dur > 0 ? dur : null,
+    treatedWith: str(e.treatedWith) || null,
+    notes: str(e.notes),
+  };
+  for (const k of ["by", "byName", "editedBy", "editedByName"]) if (str(e[k])) out[k] = str(e[k]);
+  for (const k of ["createdAt", "updatedAt"]) if (Number.isFinite(e[k])) out[k] = e[k];
+  return out;
+}
+/** Events on one local date (events: map or array), earliest first. */
+export function eventsOn(date, events) {
+  const day = dayKey(date);
+  return Object.values(events || {}).filter(e => e && e.at && dayKey(new Date(e.at)) === day).sort((a, b) => a.at.localeCompare(b.at));
+}
+/** "Bleed · Left knee · Moderate · Injury", "Activity · 45 min · Mild". */
+export function eventLabel(e) {
+  const t = EVENT_TYPES[e.type] || EVENT_TYPES.other;
+  return [t.label, BODY_AREAS[e.area], e.durationMin > 0 ? rel(e.durationMin * 60000) : null, SEVERITIES[e.severity],
+    e.type === "bleed" ? BLEED_CAUSES[e.cause] : null].filter(Boolean).join(" · ");
+}
+/** How a taken dose reads in the "Treated with" picker: "Factor VIII 2000 IU · Tue 8:14 AM" (weekday when not on `now`'s day). */
+export function doseLinkLabel(dose, meds, now = Date.now()) {
+  const med = (meds || []).find(m => m.id === dose.medId), d = new Date(dose.at);
+  const name = med ? [med.name, med.strength].filter(Boolean).join(" ") : "Medicine";
+  return name + " · " + (dayKey(d) !== dayKey(new Date(now)) ? WD[d.getDay()] + " " : "") + fmtTime(hm(d));
+}
+/** Doses taken in the last `hours` hours (up to now), newest first, for linking an event to its treatment: [{ key, label, at }]. */
+export function recentDosesForLink(meds, doses, now = Date.now(), hours = 48) {
+  const from = now - hours * 3600000, out = [];
+  for (const [key, d] of Object.entries(doses || {})) {
+    if (!d || d.status !== "taken" || !d.at) continue;
+    const t = new Date(d.at).getTime();
+    if (!(t >= from && t <= now + 60000)) continue;
+    out.push({ key, label: doseLinkLabel(d, meds, now), at: d.at });
+  }
+  return out.sort((a, b) => b.at.localeCompare(a.at));
+}

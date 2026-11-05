@@ -508,3 +508,104 @@ describe("medToIcs", () => {
     expect(medToIcs({ ...base, end: "2026-11-01", schedule: { kind: "daily" } }, {}, NOW)).toBe("");
   });
 });
+
+import { EVENT_TYPES, BODY_AREAS, SEVERITIES, BLEED_CAUSES, normalizeEvent, eventsOn, eventLabel, recentDosesForLink, doseLinkLabel } from "./model.js";
+
+describe("event constants", () => {
+  it("has the five types with label and icon", () => {
+    expect(Object.keys(EVENT_TYPES)).toEqual(["bleed", "sideEffect", "symptom", "activity", "other"]);
+    for (const t of Object.values(EVENT_TYPES)) { expect(t.label).toBeTruthy(); expect(t.icon).toBeTruthy(); }
+  });
+  it("has body areas, severities and bleed causes", () => {
+    expect(BODY_AREAS.leftKnee).toBe("Left knee");
+    expect(BODY_AREAS.mouth).toBe("Mouth / gums");
+    expect(BODY_AREAS.other).toBe("Other");
+    expect(SEVERITIES).toEqual({ 1: "Mild", 2: "Moderate", 3: "Severe" });
+    expect(Object.keys(BLEED_CAUSES)).toEqual(["spontaneous", "injury", "unknown"]);
+  });
+});
+
+describe("normalizeEvent", () => {
+  const at = new Date(2026, 10, 4, 9, 30);
+  it("keeps valid bleed fields and trims notes", () => {
+    const e = normalizeEvent({ id: "e1", type: "bleed", at: at.toISOString(), area: "leftKnee", severity: "2", cause: "injury", treatedWith: "k1", notes: "  swollen  ", by: "patient", byName: "Me" });
+    expect(e).toEqual({ id: "e1", type: "bleed", at: at.toISOString(), day: "2026-11-04", area: "leftKnee", severity: 2, cause: "injury", durationMin: null, treatedWith: "k1", notes: "swollen", by: "patient", byName: "Me" });
+  });
+  it("only keeps a cause for bleeds and a duration for activity", () => {
+    const s = normalizeEvent({ type: "symptom", at, cause: "injury", durationMin: 30 });
+    expect(s.cause).toBeNull(); expect(s.durationMin).toBeNull();
+    const a = normalizeEvent({ type: "activity", at, cause: "injury", durationMin: "44.6" });
+    expect(a.cause).toBeNull(); expect(a.durationMin).toBe(45);
+    expect(normalizeEvent({ type: "activity", at, durationMin: 0 }).durationMin).toBeNull();
+    expect(normalizeEvent({ type: "activity", at, durationMin: "" }).durationMin).toBeNull();
+    expect(normalizeEvent({ type: "activity", at, durationMin: -5 }).durationMin).toBeNull();
+  });
+  it("drops unknown values", () => {
+    const e = normalizeEvent({ type: "nope", at, area: "tail", severity: 4, cause: "magic", notes: 5, treatedWith: "  " });
+    expect(e.type).toBe("other"); expect(e.area).toBeNull(); expect(e.severity).toBeNull();
+    expect(e.cause).toBeNull(); expect(e.notes).toBe(""); expect(e.treatedWith).toBeNull();
+    expect(normalizeEvent({ type: "bleed", at, severity: 1.5 }).severity).toBeNull();
+    expect(normalizeEvent({ type: "bleed", at, severity: 0 }).severity).toBeNull();
+    expect(normalizeEvent({ type: "bleed", at, cause: "magic" }).cause).toBeNull();
+  });
+  it("makes `at` an ISO time (Date, ms or string), falling back to now", () => {
+    expect(normalizeEvent({ at }).at).toBe(at.toISOString());
+    expect(normalizeEvent({ at: at.getTime() }).at).toBe(at.toISOString());
+    const e = normalizeEvent({ at: "garbage" }, NOW);
+    expect(e.at).toBe(new Date(NOW).toISOString()); expect(e.day).toBe(today);
+  });
+  it("gives a new event an id and is idempotent", () => {
+    const e = normalizeEvent({ type: "bleed", at, area: "rightAnkle", severity: 3, cause: "spontaneous", createdAt: 5 });
+    expect(e.id).toMatch(/\w+/);
+    expect(normalizeEvent(e)).toEqual(e);
+  });
+});
+
+describe("eventsOn", () => {
+  const ev = (id, h, d = 4) => ({ id, type: "other", at: new Date(2026, 10, d, h).toISOString() });
+  it("lists one day's events earliest first, from a map or an array", () => {
+    const map = { a: ev("a", 18), b: ev("b", 7), c: ev("c", 12, 5) };
+    expect(eventsOn(new Date(2026, 10, 4), map).map(e => e.id)).toEqual(["b", "a"]);
+    expect(eventsOn(new Date(2026, 10, 5), Object.values(map)).map(e => e.id)).toEqual(["c"]);
+    expect(eventsOn(new Date(2026, 10, 6), map)).toEqual([]);
+    expect(eventsOn(new Date(), undefined)).toEqual([]);
+  });
+});
+
+describe("eventLabel", () => {
+  it("summarises type, place, duration, severity and cause", () => {
+    expect(eventLabel({ type: "bleed", area: "leftKnee", severity: 2, cause: "injury" })).toBe("Bleed · Left knee · Moderate · Injury");
+    expect(eventLabel({ type: "activity", durationMin: 90, severity: 1 })).toBe("Activity · 1 h 30 min · Mild");
+    expect(eventLabel({ type: "sideEffect" })).toBe("Side effect");
+    expect(eventLabel({ type: "symptom", cause: "injury", area: "head" })).toBe("Symptom · Head");
+    expect(eventLabel({ type: "weird" })).toBe("Other");
+  });
+});
+
+describe("recentDosesForLink", () => {
+  const meds = [{ id: "f8", name: "Factor VIII", strength: "2000 IU" }, { id: "x", name: "Ibuprofen" }];
+  const hoursAgo = h => new Date(NOW - h * 3600000).toISOString();
+  const doses = {
+    k1: { medId: "f8", status: "taken", at: hoursAgo(2) },
+    k2: { medId: "x", status: "taken", at: hoursAgo(30) },
+    k3: { medId: "f8", status: "skipped", at: hoursAgo(1) },
+    k4: { medId: "f8", status: "taken", at: hoursAgo(50) },
+    k5: { medId: "gone", status: "taken", at: hoursAgo(5) },
+    k6: { medId: "f8", status: "taken", at: new Date(NOW + 3 * 3600000).toISOString() },
+  };
+  it("lists taken doses within the window, newest first", () => {
+    const list = recentDosesForLink(meds, doses, NOW);
+    expect(list.map(d => d.key)).toEqual(["k1", "k5", "k2"]);
+    expect(list[0]).toEqual({ key: "k1", label: "Factor VIII 2000 IU · 10:00 AM", at: hoursAgo(2) });
+    expect(list[1].label).toBe("Medicine · 7:00 AM");
+    expect(list[2].label).toBe("Ibuprofen · Tue 6:00 AM");
+  });
+  it("respects the hours window", () => {
+    expect(recentDosesForLink(meds, doses, NOW, 3).map(d => d.key)).toEqual(["k1"]);
+    expect(recentDosesForLink(meds, doses, NOW, 72).map(d => d.key)).toEqual(["k1", "k5", "k2", "k4"]);
+    expect(recentDosesForLink(meds, {}, NOW)).toEqual([]);
+  });
+  it("labels a single dose", () => {
+    expect(doseLinkLabel(doses.k1, meds, NOW)).toBe("Factor VIII 2000 IU · 10:00 AM");
+  });
+});
