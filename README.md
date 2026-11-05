@@ -49,6 +49,21 @@ What the functions do, once deployed:
 
 Publishing the rules without the functions turns linking off. That is deliberate. The old 6-digit code that any signed-in client could write is not accepted.
 
+## Finding a medicine
+
+You can still type a name. **Search drug list** asks the NIH RxNav service (RxNorm) for products that include a strength and a form. **Scan package** reads a barcode on this phone. The picture is not uploaded. Android uses ML Kit through Google Play Services, on the device. A browser that has a barcode detector can use the camera; otherwise you type the digits.
+
+What is actually looked up:
+
+- A name, sent only as that name. Your doses, history, and identity are not included.
+- A 10-digit NDC printed with hyphens (4-4-2, 5-3-2, or 5-4-1), or the 11-digit form. A 10-digit code with no hyphens is tried as all three hyphenations, and only codes RxNav recognizes are shown.
+- A GTIN built the GS1 way for a US NDC: a 12-digit code starting with 3, or a 14-digit code with `03` after the packaging digit, plus a valid check digit. The embedded 10 digits are still hyphenated three ways and checked. Lot, serial, and expiry numbers are ignored.
+- A normal store UPC that does not use that pattern is **not** treated as a drug. UPC-E is not expanded. There is no local database of every product, and no assumption that every barcode is an NDC.
+
+RxNav is free and needs no account. NLM asks for no more than 20 requests a second from one address; a burst can return “busy”. The service has to be reachable. openFDA is not called, so no FDA API key and no billing. Nothing here sets your dose, your schedule, or converts mg, mL, and units. You confirm the name, strength text, and brand or generic before it is saved, and you enter how much you take yourself. A saved pick keeps its RxNorm id and NDC when there was one.
+
+OCR of a printed label is not included.
+
 ## Medicines, schedules and supply
 
 Each medicine has a **type** (pill/tablet, injection, IV infusion, liquid or other), a **dose** (pills, mL, units (IU), mg or doses) and a **schedule**: every day, certain days of the week, every N days, every N weeks (both counted from the start date), once a month on a set day (day 31 falls on the last day of shorter months), or as needed. As-needed medicines get no alarms or missed-dose alerts; log them from the Today screen when they happen. Interval schedules (every N days, every N weeks, monthly) count from the last scheduled dose actually logged: a weekly dose logged late on Tuesday at 9:30 AM is next due the following Tuesday at 9:30 AM. Until the first dose is logged they use the start date and set times; turn on **Keep fixed schedule** to always use the set dates instead. Skipped doses and additional logs don't move the schedule, and days already past keep their times. Times of day and start/end dates apply to every schedule, and the Today list, calendar, adherence, alarms and caregiver alerts all follow it.

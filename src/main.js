@@ -2,6 +2,8 @@ import "./style.css";
 import * as M from "./model.js";
 import { makeStore, syncStatus } from "./store.js";
 import { PERMISSIONS } from "./access.js";
+import { CATALOG_NOTICE, applyCatalogChoice } from "./drug-catalog.js";
+import { lookupPackageCode, searchDrugNames } from "./rxnav.js";
 import * as N from "./native.js";
 import { renderSVG } from "uqr";
 
@@ -14,7 +16,7 @@ const S = {
   patients: [], snaps: {}, pid: null, // pid: patient being viewed
   view: "today", sub: "today", onboardStep: "role",
   cal: { y: new Date().getFullYear(), m: new Date().getMonth(), sel: dayKey(new Date()) },
-  editing: null, sheet: null, alert: null, ble: "Not connected", invite: null, invitePreview: null, auth: { mode: "signin", error: "" },
+  editing: null, sheet: null, drug: null, alert: null, ble: "Not connected", invite: null, invitePreview: null, auth: { mode: "signin", error: "" },
   settings: loadSettings(), perm: "default",
 };
 function loadSettings() { try { return { dueWindowMin: 60, ...JSON.parse(localStorage.getItem("pillbox.settings") || "{}") }; } catch (e) { return { dueWindowMin: 60 }; } }
@@ -360,6 +362,7 @@ function medDetail(pid, m) {
    <section class="sheet stack"><div><div class="eyebrow">${esc(M.medSummary(m))}</div><h2><span aria-hidden="true">${M.typeIcon(m)}</span> ${esc(m.name)} ${esc(m.strength)}</h2>
      ${!M.isPrn(m) ? `<div class="muted">${m.times.map(fmtTime).join(", ")}${m.start ? " · from " + fmtDate(M.parseDay(m.start)) : ""}${m.end ? " to " + fmtDate(M.parseDay(m.end)) : ""}</div>` : ""}
      ${m.prescribedBy ? `<div class="muted">Prescribed by ${esc(m.prescribedBy)}</div>` : ""}
+     ${m.catalog?.rxcui ? `<div class="muted small">Package name from NIH RxNorm ${esc(m.catalog.rxcui)}${m.catalog.ndc ? " · NDC " + esc(m.catalog.ndc) : ""}. This is not your dose.</div>` : ""}
      ${m.updatedByName ? `<div class="muted small">Last changed by ${esc(m.updatedByName)}${m.updatedByRole === "caregiver" ? " (care team)" : ""}${m.updatedAt ? " on " + fmtDate(new Date(m.updatedAt)) : ""}</div>` : ""}</div>
      <div class="row spread" style="flex-wrap:nowrap"><div><strong>Log actual treatment</strong><div class="muted small">Records what was given. An additional log does not move reminders or change the saved dose. To correct a scheduled dose, open that dose.</div></div><button class="btn-sm" data-act="log-additional" data-pid="${pid}" data-med="${m.id}">Log</button></div>
      ${!isCare() && !M.isPrn(m) ? `<div class="row spread" style="flex-wrap:nowrap"><div><strong>Add to my calendar</strong><div class="muted small">${m.addToCalendar ? (m.calendarEventIds?.length ? "On. Repeating events are in your phone's calendar." : "On. Added with a calendar file.") : "Off. Puts each dose in your phone's calendar."}</div></div>
@@ -386,6 +389,63 @@ function medDetail(pid, m) {
 const FREQ = [["daily", "Every day"], ["weekdays", "Certain days of the week"], ["everyNDays", "Every few days"], ["everyNWeeks", "Every few weeks"], ["monthly", "Once a month"], ["prn", "As needed"]];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const opt = (v, label, sel) => `<option value="${v}" ${v === sel ? "selected" : ""}>${esc(label)}</option>`;
+function drugMessage(code) {
+  return {
+    ambiguous: "More than one medicine matched. Choose the name, strength, and form on your package.",
+    "not-found": "Nothing in the NIH list matched. Try another spelling, or type the name and strength yourself.",
+    offline: "Couldn't reach the NIH drug list. Check your connection, or type the name and strength yourself.",
+    limited: "The drug list is busy. Wait a moment, or type the name yourself.",
+    short: "Type at least two letters.",
+    unavailable: "The drug list didn't answer. Type the name yourself.",
+    invite: "That is a Pillbox connection code, not a medicine package. Connection codes are used under Care team.",
+    unmapped: "This barcode is not an NDC package code. A store UPC is not a drug code. Type the medicine name, or the NDC printed on the package.",
+    invalid: "Those digits aren't a package code this app can read. Type the name or the NDC.",
+    denied: "Camera access is off. Type the numbers under the barcode, or search by name.",
+    module: "Android is downloading the on-device scanner. The photo is not uploaded. Try again in a moment, or type the numbers.",
+    browser: "Point the camera at the package barcode.",
+  }[code] || "";
+}
+function drugChoices(list) {
+  return `<div class="list">${list.map((c, i) => `<button type="button" class="item item-btn" data-act="drug-pick" data-i="${i}"><div class="stack-tight"><strong>${esc(c.name)}</strong><span class="muted small">${esc(c.strength || "Strength not stated")} · ${c.tty === "SBD" ? "Brand" : "Generic"} · RxNorm ${esc(c.rxcui)}</span></div></button>`).join("")}</div>`;
+}
+function drugPanel() {
+  const d = S.drug;
+  if (!d) return "";
+  if (d.step === "camera") return `<div class="sheet stack"><video id="pkg-video" playsinline autoplay muted style="width:100%;max-height:240px;border-radius:12px;background:#000"></video><p class="muted">Point at the package barcode. This does not scan a connection code. The picture stays on this phone.</p><button type="button" data-act="drug-close">Cancel</button></div>`;
+  if (d.step === "review" && d.choice) {
+    const c = d.choice;
+    return `<div class="sheet stack"><h3>Check this package</h3><p><strong>${esc(c.name)}</strong></p><p>Strength printed for this product: <strong>${esc(c.strength || "not stated")}</strong></p><p class="muted small">${c.tty === "SBD" ? "Brand" : "Generic"} · RxNorm ${esc(c.rxcui)}${c.ndc ? " · NDC " + esc(c.ndc) : ""}</p><p class="muted">Using this fills the name and that strength text only. It does not set how much you take, how often, or convert mg, mL, and units.</p><div class="row"><button type="button" class="btn-primary" data-act="drug-use">Use this name</button><button type="button" data-act="drug-back">Back</button></div></div>`;
+  }
+  if (d.step === "code" || d.step === "results") return `<div class="sheet stack"><div class="field"><label for="drug-code">Numbers under the barcode</label><input id="drug-code" value="${esc(d.code || "")}" autocomplete="off"></div>${d.message ? `<p>${esc(d.message)}</p>` : ""}${d.choices?.length ? drugChoices(d.choices) : ""}<div class="row"><button type="button" class="btn-primary" data-act="drug-code-go">Look up</button><button type="button" data-act="drug-open">Search by name</button><button type="button" data-act="drug-close">Close</button></div></div>`;
+  return `<div class="sheet stack"><div class="field"><label for="drug-q">Drug name</label><input id="drug-q" value="${esc(d.query || "")}" placeholder="e.g. lisinopril"></div><p class="muted small">${esc(CATALOG_NOTICE)}</p>${d.message ? `<p>${esc(d.message)}</p>` : ""}${d.choices?.length ? drugChoices(d.choices) : ""}<div class="row"><button type="button" class="btn-primary" data-act="drug-search">Search</button><button type="button" data-act="drug-close">Close</button></div></div>`;
+}
+async function lookupCode(text) {
+  S.drug = { step: "code", code: text, message: "Looking up…", choices: [] };
+  render();
+  const res = await lookupPackageCode(text);
+  if (!S.drug) return;
+  const choices = res.choices || [];
+  S.drug = { step: choices.length ? "results" : "code", code: text, choices, message: choices.length ? drugMessage(res.code) : drugMessage(res.code) };
+}
+async function beginPackageScan() {
+  readForm();
+  const support = N.packageScanSupport();
+  if (support === "manual") { S.drug = { step: "code", message: "This browser can't open a camera scanner. Type the numbers under the barcode, or search by name.", choices: [] }; return; }
+  if (support === "browser") {
+    S.drug = { step: "camera", message: "" };
+    render();
+    const video = document.getElementById("pkg-video");
+    const res = video ? await N.startBrowserScan(video) : { ok: false, code: "unavailable" };
+    if (!S.drug || S.drug.step !== "camera") return;
+    if (!res.ok) { if (res.code !== "cancelled") S.drug = { step: "code", message: drugMessage(res.code) || "Couldn't scan. Type the numbers instead.", choices: [] }; else S.drug = null; return; }
+    await lookupCode(res.text);
+    return;
+  }
+  const res = await N.scanPackageBarcode();
+  if (!S.editing) return;
+  if (!res.ok) { if (res.code !== "cancelled") S.drug = { step: "code", message: drugMessage(res.code) || "Couldn't scan. Type the numbers instead.", choices: [] }; return; }
+  await lookupCode(res.text);
+}
 function medForm() {
   const m = S.editing, T = M.TYPES[m.type], sc = m.schedule, pill = m.type === "pill", u = m.supplyUnit;
   const container = M.CONTAINERS.includes(u), everyN = sc.kind === "everyNDays" || sc.kind === "everyNWeeks";
@@ -396,6 +456,9 @@ function medForm() {
   else if (sc.kind === "monthly") freq = `<div class="amount"><span>On day</span><input name="dayOfMonth" type="number" min="1" max="31" inputmode="numeric" required value="${sc.dayOfMonth || (m.start ? M.parseDay(m.start).getDate() : new Date().getDate())}" aria-label="Day of the month"><span>of each month</span></div><div class="muted">In shorter months, the last day.</div>${fixedToggle}`;
   else if (sc.kind === "prn") freq = `<div class="muted">No reminders or missed-dose alerts. Log a treatment on the Today screen when it happens.</div>`;
   return `<form class="sheet stack" id="medform"><h2>${m.isNew ? "Add medicine" : "Edit medicine"}</h2>
+   ${drugPanel()}
+   <div class="row"><button type="button" data-act="drug-open">Search drug list</button><button type="button" data-act="drug-scan">Scan package</button></div>
+   <p class="muted small">${esc(CATALOG_NOTICE)}</p>
    <div class="field"><label for="f-name">Name</label><input id="f-name" name="name" required value="${esc(m.name)}" placeholder="e.g. Amoxicillin"></div>
    <fieldset class="field"><legend>Type</legend><div class="opts">${Object.entries(M.TYPES).map(([k, t]) => `<label class="opt"><input type="radio" name="type" value="${k}" data-live ${m.type === k ? "checked" : ""}><span><span aria-hidden="true">${t.icon}</span> ${esc(t.label)}</span></label>`).join("")}</div></fieldset>
    <div class="${pill ? "grid2" : "stack"}"><div class="field"><label for="f-strength">Strength (optional)</label><input id="f-strength" name="strength" value="${esc(m.strength)}" placeholder="${pill ? "e.g. 250 mg" : "e.g. 100 units/mL"}"></div>
@@ -657,7 +720,7 @@ function route() {
   S.view = valid.includes(h) ? h : valid[0];
   if (!isCare()) S.pid = S.patients.find(p => p.id === "me")?.id || S.patients.find(p => p.owner)?.id || S.pid;
   if (isCare() && (S.view !== "patients" || S.pid === "me")) S.pid = null;
-  S.editing = null; S.sheet = null; S.joinError = ""; S.medDetail = null; S.stockForm = null;
+  S.editing = null; S.sheet = null; S.drug = null; N.stopBrowserScan(); S.joinError = ""; S.medDetail = null; S.stockForm = null;
   render(); window.scrollTo(0, 0);
 }
 
@@ -716,7 +779,11 @@ function cleanSchedule(sc) {
   return out;
 }
 // Remember the picked time so a background redraw (new data, 30 s tick) doesn't reset the picker.
-document.addEventListener("input", e => { if (e.target.id === "t-at" && S.sheet) S.sheet.value = e.target.value; });
+document.addEventListener("input", e => {
+  if (e.target.id === "t-at" && S.sheet) S.sheet.value = e.target.value;
+  if (e.target.id === "drug-q" && S.drug) S.drug.query = e.target.value;
+  if (e.target.id === "drug-code" && S.drug) S.drug.code = e.target.value;
+});
 // Type, frequency and supply-unit pickers redraw the form so only the relevant fields show.
 document.addEventListener("change", e => {
   if (!e.target.matches("#medform [data-live]")) return;
@@ -764,9 +831,43 @@ document.addEventListener("click", async e => {
       case "cal-prev": S.cal.m--; if (S.cal.m < 0) { S.cal.m = 11; S.cal.y--; } break;
       case "cal-next": S.cal.m++; if (S.cal.m > 11) { S.cal.m = 0; S.cal.y++; } break;
       case "cal-sel": S.cal.sel = el.dataset.day; render(); document.getElementById("day-detail")?.scrollIntoView({ behavior: "smooth", block: "start" }); return;
-      case "new": S.editing = { ...M.normalizeMed({ id: M.uid(), name: "", strength: "", type: "pill", doseAmount: 1, times: ["08:00"], schedule: { kind: "daily" }, start: dayKey(new Date()), stock: 30, refillAt: 5, slot: null, notes: "", color: M.COLORS[snap().meds.length % M.COLORS.length] }), isNew: true }; break;
+      case "new": S.drug = null; S.editing = { ...M.normalizeMed({ id: M.uid(), name: "", strength: "", type: "pill", doseAmount: 1, times: ["08:00"], schedule: { kind: "daily" }, start: dayKey(new Date()), stock: 30, refillAt: 5, slot: null, notes: "", color: M.COLORS[snap().meds.length % M.COLORS.length] }), isNew: true }; break;
+      case "drug-open": readForm(); S.drug = { step: "search", query: (document.getElementById("drug-q")?.value || S.editing?.name || ""), message: "", choices: S.drug?.choices || [] }; break;
+      case "drug-close": S.drug = null; N.stopBrowserScan(); break;
+      case "drug-back": if (S.drug) S.drug.step = S.drug.choices?.length ? "results" : "search"; break;
+      case "drug-pick": {
+        const choice = S.drug?.choices?.[Number(el.dataset.i)];
+        if (choice) S.drug = { ...S.drug, step: "review", choice };
+        break;
+      }
+      case "drug-use": {
+        if (!S.drug?.choice || !S.editing) break;
+        readForm();
+        const doseAmount = S.editing.doseAmount, doseUnit = S.editing.doseUnit, times = S.editing.times, schedule = S.editing.schedule;
+        Object.assign(S.editing, applyCatalogChoice(S.editing, S.drug.choice));
+        S.editing.doseAmount = doseAmount; S.editing.doseUnit = doseUnit; S.editing.times = times; S.editing.schedule = schedule;
+        S.drug = null;
+        break;
+      }
+      case "drug-search": {
+        readForm();
+        const query = document.getElementById("drug-q")?.value ?? S.drug?.query ?? "";
+        S.drug = { step: "search", query, message: "Searching…", choices: [] };
+        render();
+        const res = await searchDrugNames(query);
+        if (!S.drug) break;
+        S.drug.choices = (res.choices || []).slice(0, 20);
+        S.drug.message = res.choices?.length > 20 ? "Showing the first 20. Type more of the name if yours isn't here." : drugMessage(res.code);
+        break;
+      }
+      case "drug-code-go": {
+        const code = document.getElementById("drug-code")?.value ?? S.drug?.code ?? "";
+        await lookupCode(code);
+        break;
+      }
+      case "drug-scan": await beginPackageScan(); break;
       case "edit": S.editing = M.normalizeMed(structuredClone(snap().meds.find(m => m.id === el.dataset.med))); break;
-      case "cancel": S.editing = null; break;
+      case "cancel": S.drug = null; N.stopBrowserScan(); S.editing = null; break;
       case "med-open": S.medDetail = el.dataset.med; S.stockForm = null; window.scrollTo(0, 0); break;
       case "med-close": S.medDetail = null; S.stockForm = null; break;
       case "stock-refill": S.stockForm = { mode: "refill" }; break;
