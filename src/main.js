@@ -1,18 +1,20 @@
 import "./style.css";
 import * as M from "./model.js";
-import { makeStore } from "./store.js";
+import { makeStore, syncStatus } from "./store.js";
+import { PERMISSIONS } from "./access.js";
 import * as N from "./native.js";
+import { renderSVG } from "uqr";
 
 const { esc, fmtTime, fmtClock, dayKey } = M;
 const $app = document.getElementById("app");
 const $nav = document.getElementById("tabs");
 
 const S = {
-  role: "patient", store: null, user: null,
+  role: "patient", store: null, user: null, profile: null, activeView: "patient", legacyCare: false,
   patients: [], snaps: {}, pid: null, // pid: patient being viewed
-  view: "today", sub: "today",
+  view: "today", sub: "today", onboardStep: "role",
   cal: { y: new Date().getFullYear(), m: new Date().getMonth(), sel: dayKey(new Date()) },
-  editing: null, sheet: null, alert: null, ble: "Not connected", link: null, auth: { mode: "signin", error: "" },
+  editing: null, sheet: null, alert: null, ble: "Not connected", invite: null, invitePreview: null, auth: { mode: "signin", error: "" },
   settings: loadSettings(), perm: "default",
 };
 function loadSettings() { try { return { dueWindowMin: 60, ...JSON.parse(localStorage.getItem("pillbox.settings") || "{}") }; } catch (e) { return { dueWindowMin: 60 }; } }
@@ -20,11 +22,54 @@ function saveSettings() { try { localStorage.setItem("pillbox.settings", JSON.st
 const opts = () => ({ now: Date.now(), dueWindowMin: S.settings.dueWindowMin });
 const snap = (pid = S.pid) => S.snaps[pid] || { meds: [], doses: {}, events: {}, name: "" };
 // Background redraws (new data, 30 s tick) wait while a form is open, so typing and focus aren't lost.
-const busy = () => !!(S.editing || S.sheet?.ev);
-const isCare = () => S.role === "caregiver";
+const busy = () => !!(S.editing || S.sheet);
+const isCare = () => S.activeView === "caregiver";
+const PKEY = "pillbox.profile";
+function readProfile() { try { return JSON.parse(localStorage.getItem(PKEY) || "null"); } catch (e) { return null; } }
+function writeProfile(p) { try { localStorage.setItem(PKEY, JSON.stringify(p)); } catch (e) {} }
+function chooseView(profile) {
+  if (!profile) return "patient";
+  let saved = "";
+  try { saved = localStorage.getItem("pillbox.activeView") || ""; } catch (e) {}
+  if (profile.usePatient && profile.useCaregiver && (saved === "patient" || saved === "caregiver")) return saved;
+  return profile.useCaregiver && !profile.usePatient ? "caregiver" : "patient";
+}
+function setActiveView(view) {
+  S.activeView = view === "caregiver" ? "caregiver" : "patient";
+  S.role = S.activeView;
+  try { localStorage.setItem("pillbox.activeView", S.activeView); } catch (e) {}
+  document.documentElement.dataset.role = S.role;
+}
+// uiRole is a label on the log. It is not sent to access checks.
+const actor = () => ({ uid: S.user?.uid || "local", name: S.user?.name || "", uiRole: S.activeView });
+function applyUse(usePatient, useCaregiver, recommended, view) {
+  const profile = { usePatient: !!usePatient, useCaregiver: !!useCaregiver, recommended: recommended || null, onboarded: true };
+  if (!profile.usePatient && !profile.useCaregiver) profile.usePatient = true;
+  if (S.store.applyProfile) S.profile = S.store.applyProfile(profile);
+  else S.profile = profile;
+  writeProfile(S.profile);
+  setActiveView(view || (profile.usePatient ? "patient" : "caregiver"));
+}
 
 // ---------------- actions ----------------
-const stockEv = (reason, note = "") => ({ reason, note, by: S.role, byName: S.user?.name || "" });
+const stockEv = (reason, note = "") => ({ reason, note, by: S.activeView === "caregiver" ? "caregiver" : "patient", byName: S.user?.name || "", opId: M.uid() });
+function doseResultMessage(res, med) {
+  const when = res?.at || res?.dose?.at;
+  const nm = med ? M.normalizeMed(med) : null;
+  const same = nm && res?.dose && Number(res.dose.amount) === nm.doseAmount && res.dose.unit === nm.doseUnit;
+  const what = same ? M.doseLabel(med) : (res?.dose?.amount && res?.dose?.unit ? M.qty(res.dose.amount, res.dose.unit) : (med ? M.doseLabel(med) : "treatment"));
+  return "Logged " + what + (when ? " at " + fmtClock(when) : "");
+}
+async function commit(pid, cmd) {
+  const res = await S.store.commitDose(pid, { ...cmd, actor: actor(), now: Date.now() });
+  if (res.code === "already-logged") {
+    const med = snap(pid).meds.find(m => m.id === cmd.medId);
+    showAlert("dup", (med?.name || "This treatment") + " is already logged" + (res.at ? " at " + fmtClock(res.at) : "") + ".");
+    return null;
+  }
+  if (!res.ok && res.code !== "replay" && res.code !== "unchanged") throw new Error(res.message || "Couldn't save that.");
+  return res;
+}
 // Change the pill count. If that can't be saved, put back the dose change that went with it (revert) so the
 // count and the dose log don't drift apart, and throw an error the caller shows as a toast.
 async function adjustStock(pid, medId, delta, ev, revert) {
@@ -38,44 +83,35 @@ async function adjustStock(pid, medId, delta, ev, revert) {
 const putBack = (pid, key, was) => () => was ? S.store.setDose(pid, key, was) : S.store.clearDose(pid, key);
 // `when` (a Date) is for doses logged late with "Taken earlier?"; otherwise it's now.
 async function takeDose(pid, d, source = "app", when = new Date()) {
-  const p = snap(pid);
-  const existing = p.doses[d.key];
-  if (existing && existing.status === "taken") { showAlert("dup", "Already taken at " + fmtClock(existing.at) + "."); return false; }
-  const used = M.supplyPerDose(d.med); // in the supply unit: pills, a share of a vial, mL…
-  await S.store.setDose(pid, d.key, { medId: d.med.id, day: d.day, time: d.time, slot: d.slot || d.time, status: "taken", at: when.toISOString(), source, by: S.role, byName: S.user?.name || "", used });
-  // Anything logged here before was a skip, which used nothing, so taking always comes out of the supply.
-  await adjustStock(pid, d.med.id, -used, stockEv("taken"), putBack(pid, d.key, existing));
-  return true;
-}
-// Correct when a dose was taken. The supply already changed when it was logged, so only the time moves.
-async function setDoseTime(pid, key, when) {
-  const was = snap(pid).doses[key]; if (!was) return;
-  // extra (as-needed) doses are filed under the day and time they were taken, so those move with it
-  const moved = was.extra ? { day: dayKey(when), time: M.hm(when) } : {};
-  await S.store.setDose(pid, key, { ...was, ...moved, at: when.toISOString(), timeEditedAt: new Date().toISOString(), timeEditedBy: S.user?.name || S.role });
+  const nm = M.normalizeMed(d.med);
+  return commit(pid, {
+    opId: M.uid(), kind: "log", medId: d.med.id, key: d.key, extra: false,
+    slot: d.slot || d.time, day: d.day, time: d.time, at: when.toISOString(),
+    amount: nm.doseAmount, unit: nm.doseUnit, source,
+  });
 }
 async function skipDose(pid, d) {
-  const was = snap(pid).doses[d.key];
-  await S.store.setDose(pid, d.key, { medId: d.med.id, day: d.day, time: d.time, slot: d.slot || d.time, status: "skipped", at: new Date().toISOString(), source: "app", by: S.role, byName: S.user?.name || "" });
-  const back = M.supplyTaken(was, d.med);
-  if (back) await adjustStock(pid, d.med.id, back, stockEv("undo"), putBack(pid, d.key, was));
+  return commit(pid, { opId: M.uid(), kind: "skip", medId: d.med.id, key: d.key, day: d.day, time: d.time, slot: d.slot || d.time, at: new Date().toISOString() });
 }
 async function undoDose(pid, key) {
-  const was = snap(pid).doses[key]; if (!was) return;
-  await S.store.clearDose(pid, key);
-  const med = snap(pid).meds.find(m => m.id === was.medId), back = M.supplyTaken(was, med);
-  if (med && back) await adjustStock(pid, med.id, back, stockEv("undo"), putBack(pid, key, was));
+  const was = snap(pid).doses[key]; if (!was) return null;
+  return commit(pid, { opId: M.uid(), kind: "remove", medId: was.medId, key });
 }
-async function takeExtra(pid, med, force = false) {
+// An additional log is not a scheduled dose. It does not move reminders.
+async function logAdditional(pid, med, when = new Date(), amount, unit, force = false) {
   const last = M.lastTaken(med.id, snap(pid).doses);
   if (!force && last && Date.now() - new Date(last.at).getTime() < 2 * 3600000) {
-    S.alert = { kind: "dup", text: "You took " + med.name + " at " + fmtClock(last.at) + ", less than 2 hours ago.", force: med.id }; render(); return;
+    S.alert = { kind: "dup", text: "You logged " + med.name + " at " + fmtClock(last.at) + ", less than 2 hours ago. Logging another treatment does not change the prescription.", force: med.id };
+    render(); return null;
   }
-  const now = new Date();
-  const key = "extra_" + med.id + "_" + now.getTime(), used = M.supplyPerDose(med);
-  await S.store.setDose(pid, key, { medId: med.id, day: dayKey(now), time: M.hm(now), status: "taken", at: now.toISOString(), source: "app", by: S.role, byName: S.user?.name || "", extra: true, used });
-  await adjustStock(pid, med.id, -used, stockEv("taken", "extra dose"), putBack(pid, key, null));
-  toast(med.name + " logged", key);
+  const nm = M.normalizeMed(med);
+  const res = await commit(pid, {
+    opId: M.uid(), kind: "log", medId: med.id, extra: true,
+    amount: amount != null && amount !== "" ? Number(amount) : nm.doseAmount, unit: unit || nm.doseUnit,
+    at: when.toISOString(), day: dayKey(when), time: M.hm(when), source: "app",
+  });
+  if (res && res.code === "applied") toast(doseResultMessage(res, med), res.key);
+  return res;
 }
 async function lidOpened(slot, source) {
   const pid = S.pid, p = snap(pid);
@@ -89,13 +125,13 @@ async function lidOpened(slot, source) {
     N.alertNow("Already taken", med.name + " was taken at " + fmtClock(last.at) + ".");
     return;
   }
-  await takeExtra(pid, med, true);
+  await logAdditional(pid, med, new Date(), null, null, true);
 }
 function showAlert(kind, text) { S.alert = { kind, text }; render(); }
 let toastT;
 function toast(text, undo) {
   const el = document.getElementById("toast");
-  el.innerHTML = esc(text) + (undo ? ` <button class="btn-sm btn-quiet toast-undo" data-act="undo" data-key="${undo}">Undo</button> <button class="btn-sm btn-quiet toast-undo" data-act="edit-time" data-key="${undo}">Change time</button>` : "");
+  el.innerHTML = esc(text) + (undo ? ` <button class="btn-sm btn-quiet toast-undo" data-act="undo" data-key="${undo}">Undo</button> <button class="btn-sm btn-quiet toast-undo" data-act="edit-time" data-key="${undo}">Edit log</button>` : "");
   el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (el.hidden = true), undo ? 6000 : 3200);
 }
 
@@ -123,19 +159,32 @@ async function syncCalendar(before, m) {
 const header = (title, sub, right = "") => `<header class="top"><div style="min-width:0"><div class="eyebrow">${esc(sub)}</div><h1>${esc(title)}</h1></div>${right}</header>`;
 function alertBanner() {
   if (!S.alert) return "";
-  return `<div class="banner ${S.alert.kind}" role="alert"><div>${esc(S.alert.text)}</div><div class="row">${S.alert.force ? `<button class="btn-sm btn-danger" data-act="force" data-med="${S.alert.force}">Log anyway</button>` : ""}<button class="btn-sm" data-act="dismiss">OK</button></div></div>`;
+  return `<div class="banner ${S.alert.kind}" role="alert"><div>${esc(S.alert.text)}</div><div class="row">${S.alert.force ? `<button class="btn-sm btn-danger" data-act="force" data-med="${S.alert.force}">Log this treatment</button>` : ""}<button class="btn-sm" data-act="dismiss">OK</button></div></div>`;
 }
 function exampleBanner() {
   if (!S.store.example) return "";
-  const what = isCare() ? "These are example patients so you can see how the caregiver app works." : "These are example medicines.";
-  return `<div class="banner info"><div><strong>${what}</strong> ${isCare() ? "Real patients appear once sync is set up." : "Replace them with your own."}</div><button class="btn-sm" data-act="clear-examples">Start empty</button></div>`;
+  if (isCare()) {
+    const people = (S.patients || []).some(p => p.id !== "me" && (p.example || String(p.name || "").startsWith("Example:")));
+    if (!people) return "";
+    return `<div class="banner info"><div><strong>These example people are saved on this phone.</strong> They are not real and not linked to anyone.</div><button class="btn-sm" data-act="clear-examples">Start empty</button></div>`;
+  }
+  return `<div class="banner info"><div><strong>These are example medicines on this phone.</strong> Replace them with your own.</div><button class="btn-sm" data-act="clear-examples">Start empty</button></div>`;
+}
+function legacyBanner() {
+  if (!S.legacyCare) return "";
+  return `<div class="banner info"><div><strong>This is the separate Pillbox Care app.</strong> Its records stay here. Android cannot move them into Pillbox (com.pillbox.patient). Nothing is deleted. Export a backup and import it in Pillbox. That file is not a live link.</div></div>`;
+}
+function viewSwitch() {
+  const p = S.profile;
+  if (!p?.usePatient || !p?.useCaregiver) return "";
+  return `<div class="seg view-switch" role="tablist" aria-label="Which view"><button type="button" role="tab" aria-selected="${!isCare()}" data-act="switch-view" data-view="patient">My medicines</button><button type="button" role="tab" aria-selected="${isCare()}" data-act="switch-view" data-view="caregiver">People I help</button></div><p class="muted small">Switching views does not share medicines or grant access.</p>`;
 }
 
 function wells(pid, list) {
   return `<div class="pack">` + list.map(d => `<button class="well ${d.status}" data-act="well" data-pid="${pid}" data-key="${d.key}" aria-label="${esc(d.med.name)}, ${esc(M.fmtDoseTimes(d))}${d.log ? "" : ", " + d.status}">
     <span class="pill" aria-hidden="true"></span>
-    <span class="time">${d.log ? `<span class="sched">Scheduled</span> ` : ""}${fmtTime(d.time)}</span><span class="name"><span aria-hidden="true">${M.typeIcon(d.med)}</span> ${esc(d.med.name)}</span><span class="dose">${d.med.strength ? esc(d.med.strength) + " · " : ""}${esc(M.doseLabel(d.med))}</span>
-    <span class="chip ${d.status}">${d.log ? M.fmtLogged(d.log, d.day) : d.status === "upcoming" || d.status === "due" || d.status === "missed" ? (isCare() ? d.status : "Tap when taken") : d.status}</span>
+    <span class="time">${d.log ? `<span class="sched">Scheduled</span> ` : ""}${fmtTime(d.time)}</span><span class="name"><span aria-hidden="true">${M.typeIcon(d.med)}</span> ${esc(d.med.name)}</span><span class="dose">${d.med.strength ? esc(d.med.strength) + " · " : ""}${esc(M.administrationLabel(d.log, d.med))}</span>
+    <span class="chip ${d.status}">${d.log ? M.fmtLogged(d.log, d.day) : d.status === "upcoming" || d.status === "due" || d.status === "missed" ? (isCare() ? d.status : "Log now") : d.status}</span>
     ${d.log && d.log.by === "caregiver" && !isCare() ? `<span class="muted small">by ${esc(d.log.byName || "caregiver")}</span>` : ""}
     ${d.log && d.log.by === "patient" && isCare() && d.log.source === "pillbox" ? `<span class="muted small">from pillbox</span>` : ""}</button>`).join("") + `</div>`;
 }
@@ -202,18 +251,17 @@ function eventSheet() {
 
 function todayBlock(pid) {
   const p = snap(pid), now = new Date(), list = M.dosesOn(now, p.meds, p.doses, opts());
-  const groupDue = list.filter(d => (d.status === "due" || d.status === "missed") && !d.log);
-  const nextT = groupDue.length ? groupDue[0].time : null;
-  const group = nextT ? groupDue.filter(d => d.time === nextT) : [];
+  const dueNow = list.filter(d => (d.status === "due" || d.status === "missed") && !d.log);
+  const rest = list.filter(d => !dueNow.includes(d));
   const upcoming = list.find(d => d.status === "upcoming");
   const taken = list.filter(d => d.status === "taken").length;
   let h = "";
-  if (group.length) {
-    h += `<button class="take-all" data-act="take-group" data-pid="${pid}" data-time="${nextT}">
-      <span class="eyebrow">${group[0].status === "missed" ? "Late" : "Due now"} · ${fmtTime(nextT)}</span>
-      <span class="take-label">${isCare() ? "Mark as given" : "I took my medicine"}</span>
-      <span class="take-meds">${group.map(d => esc(d.med.name) + " " + esc(d.med.strength)).join(" · ")}</span></button>
-      <div class="row" style="margin-top:-6px"><button class="btn-quiet btn-sm" data-act="earlier-group" data-pid="${pid}" data-time="${nextT}">Taken earlier?</button></div>`;
+  if (dueNow.length) {
+    h += `<section class="stack"><h2>${dueNow.some(d => d.status === "missed") ? "Late" : "Due now"}</h2>` + dueNow.map(d => `<div class="due-row"><button class="log-one" data-act="well" data-pid="${pid}" data-key="${d.key}">
+      <span class="eyebrow">${d.status === "missed" ? "Late" : "Due now"} · ${fmtTime(d.time)}</span>
+      <span class="take-label"><span aria-hidden="true">${M.typeIcon(d.med)}</span> ${esc(d.med.name)}</span>
+      <span class="take-meds">Log ${esc(M.doseLabel(d.med))} now</span></button>
+      <button class="btn-sm" data-act="open-sheet" data-pid="${pid}" data-key="${d.key}">Other time</button></div>`).join("") + `</section>`;
   } else {
     h += `<section class="next"><div class="row spread"><div><div class="eyebrow">Next dose</div>${upcoming ? `<div class="big time">${fmtTime(upcoming.time)}</div><div><strong>${esc(upcoming.med.name)}</strong> ${esc(upcoming.med.strength)}</div><div class="muted">in ${M.rel(upcoming.when - now)}</div>` : `<div class="big">All done</div><div class="muted">${list.length ? "No more doses today." : "No scheduled doses."}</div>`}</div>
       <div style="text-align:right"><div class="eyebrow">Taken</div><div class="big mono">${taken}/${list.length}</div></div></div></section>`;
@@ -223,10 +271,10 @@ function todayBlock(pid) {
   h += `<section class="stack"><button class="log-event" data-act="ev-new" data-pid="${pid}"><span aria-hidden="true">＋</span> Log event</button>
     ${evs.length ? `<h2>Today's events</h2>${eventList(pid, evs)}` : ""}</section>`;
   h += `<section class="stack"><h2>Today's doses</h2>`;
-  h += list.length ? wells(pid, list) : `<p class="muted">${isCare() ? "No scheduled doses today." : "Add a medicine with times and it shows up here."}</p>`;
+  h += rest.length ? wells(pid, rest) : (dueNow.length ? "" : `<p class="muted">${isCare() ? "No scheduled doses today." : "Add a medicine with times and it shows up here."}</p>`);
   h += `</section>`;
   const prn = p.meds.filter(M.isPrn);
-  if (prn.length) h += `<section class="stack"><h2>As needed</h2><div class="list">` + prn.map(m => { const l = M.lastTaken(m.id, p.doses); return `<div class="item"><div><span aria-hidden="true">${M.typeIcon(m)}</span> <strong>${esc(m.name)}</strong> ${esc(m.strength)} <span class="muted">· ${esc(M.doseLabel(m))}</span><div class="muted">${l ? "Last taken " + fmtClock(l.at) + (l.day === dayKey(now) ? " today" : " on " + M.parseDay(l.day).toLocaleDateString()) : "Not taken yet"}</div></div><button class="btn-sm" data-act="take-prn" data-pid="${pid}" data-med="${m.id}">Log dose</button></div>`; }).join("") + `</div></section>`;
+  if (prn.length) h += `<section class="stack"><h2>As needed</h2><div class="list">` + prn.map(m => { const l = M.lastTaken(m.id, p.doses); return `<div class="item"><div><span aria-hidden="true">${M.typeIcon(m)}</span> <strong>${esc(m.name)}</strong> ${esc(m.strength)} <span class="muted">· ${esc(M.doseLabel(m))}</span><div class="muted">${l ? "Last logged " + fmtClock(l.at) + (l.day === dayKey(now) ? " today" : " on " + M.parseDay(l.day).toLocaleDateString()) : "Nothing logged yet"}</div></div><button class="btn-sm" data-act="take-prn" data-pid="${pid}" data-med="${m.id}">Log treatment</button></div>`; }).join("") + `</div></section>`;
   const low = M.lowStock(p.meds, p.doses);
   if (low.length) h += `<div class="banner dup"><div><strong>Refill soon:</strong> ${low.map(m => esc(m.name) + " (" + left(m, p.doses) + " left)").join(", ")}</div></div>`;
   return h;
@@ -264,16 +312,16 @@ function calendarBlock(pid) {
     ${sum.list.length ? `<div class="muted">${sum.taken} of ${sum.total} scheduled doses taken${sum.list.some(d => d.status === "missed") ? ` · <span class="stock-low">${sum.list.filter(d => d.status === "missed").length} missed</span>` : ""}</div>` : ""}
     ${sum.list.length || extras.length ? `<div class="list day-list">` + sum.list.map(d => `<div class="item dd ${d.status}"><div class="stack-tight">
         <div><span aria-hidden="true">${M.typeIcon(d.med)}</span> <strong>${esc(d.med.name)}</strong> ${esc(d.med.strength || "")} <span class="chip ${d.status}">${CAL_STATUS[d.status] || d.status}</span></div>
-        <div class="dd-amt">${esc(M.doseLabel(d.med))}</div>
+        <div class="dd-amt">${esc(M.administrationLabel(d.log, d.med))}</div>
         <div class="dd-times"><span>Scheduled <strong class="mono">${fmtTime(d.time)}</strong></span><span>${actualText(d)}</span></div>
         ${d.log && (d.log.by === "caregiver" || d.log.source === "pillbox") ? `<div class="muted small">${d.log.by === "caregiver" ? "Logged by " + esc(d.log.byName || "caregiver") : ""}${d.log.by === "caregiver" && d.log.source === "pillbox" ? " · " : ""}${d.log.source === "pillbox" ? "From pillbox" : ""}</div>` : ""}</div>
       ${d.log ? `<button class="btn-sm" data-act="undo" data-pid="${pid}" data-key="${d.key}">Undo</button>` : d.status !== "upcoming" ? `<button class="btn-sm btn-primary" data-act="open-sheet" data-pid="${pid}" data-key="${d.key}">Log…</button>` : ""}</div>`).join("")
-      + extras.map(([k, v]) => { const med = p.meds.find(x => x.id === v.medId); return `<div class="item dd taken"><div class="stack-tight"><div>${med ? `<span aria-hidden="true">${M.typeIcon(med)}</span> ` : ""}<strong>${esc(med ? med.name : "Medicine")}</strong> ${esc(med?.strength || "")} <span class="chip taken">extra</span></div>${med ? `<div class="dd-amt">${esc(M.doseLabel(med))}</div>` : ""}<div class="dd-times"><span>As needed</span><span>Taken <strong class="mono">${fmtClock(v.at)}</strong></span></div></div><button class="btn-sm" data-act="open-sheet" data-pid="${pid}" data-key="${k}">Details</button></div>`; }).join("") + `</div>` : `<p class="muted">Nothing scheduled.</p>`}
+      + extras.map(([k, v]) => { const med = p.meds.find(x => x.id === v.medId); return `<div class="item dd taken"><div class="stack-tight"><div>${med ? `<span aria-hidden="true">${M.typeIcon(med)}</span> ` : ""}<strong>${esc(med ? med.name : "Medicine")}</strong> ${esc(med?.strength || "")} <span class="chip taken">additional</span></div>${med ? `<div class="dd-amt">${esc(M.administrationLabel(v, med))}</div>` : ""}<div class="dd-times"><span>Not a scheduled dose</span><span>Logged <strong class="mono">${fmtClock(v.at)}</strong></span></div></div><button class="btn-sm" data-act="open-sheet" data-pid="${pid}" data-key="${k}">Details</button></div>`; }).join("") + `</div>` : `<p class="muted">Nothing scheduled.</p>`}
     ${dayEvents.length ? `<h3>Events</h3>${eventList(pid, dayEvents)}` : ""}
   </section>`;
 }
 
-const REASON = { taken: "Dose taken", undo: "Dose undone", refill: "Refill", adjust: "Count corrected", start: "Starting count" };
+const REASON = { taken: "Treatment logged", undo: "Supply restored", refill: "Refill", adjust: "Count corrected", start: "Starting count", removed: "Log removed", edit: "Log corrected", additional: "Additional treatment", skip: "Scheduled dose skipped" };
 const fmtDate = d => d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 const cap = s => s === "mL" ? s : s.charAt(0).toUpperCase() + s.slice(1);
 const left = (m, doses) => { const s = M.supply(m, Date.now(), doses); return M.qty(s.left || 0, s.unit); };
@@ -313,6 +361,7 @@ function medDetail(pid, m) {
      ${!M.isPrn(m) ? `<div class="muted">${m.times.map(fmtTime).join(", ")}${m.start ? " · from " + fmtDate(M.parseDay(m.start)) : ""}${m.end ? " to " + fmtDate(M.parseDay(m.end)) : ""}</div>` : ""}
      ${m.prescribedBy ? `<div class="muted">Prescribed by ${esc(m.prescribedBy)}</div>` : ""}
      ${m.updatedByName ? `<div class="muted small">Last changed by ${esc(m.updatedByName)}${m.updatedByRole === "caregiver" ? " (care team)" : ""}${m.updatedAt ? " on " + fmtDate(new Date(m.updatedAt)) : ""}</div>` : ""}</div>
+     <div class="row spread" style="flex-wrap:nowrap"><div><strong>Log actual treatment</strong><div class="muted small">Records what was given. An additional log does not move reminders or change the saved dose. To correct a scheduled dose, open that dose.</div></div><button class="btn-sm" data-act="log-additional" data-pid="${pid}" data-med="${m.id}">Log</button></div>
      ${!isCare() && !M.isPrn(m) ? `<div class="row spread" style="flex-wrap:nowrap"><div><strong>Add to my calendar</strong><div class="muted small">${m.addToCalendar ? (m.calendarEventIds?.length ? "On. Repeating events are in your phone's calendar." : "On. Added with a calendar file.") : "Off. Puts each dose in your phone's calendar."}</div></div>
        <button class="btn-sm ${m.addToCalendar ? "" : "btn-primary"}" role="switch" aria-checked="${!!m.addToCalendar}" data-act="cal-toggle" data-med="${m.id}">${m.addToCalendar ? "Turn off" : "Turn on"}</button></div>` : ""}
      <div class="supply-grid">
@@ -345,7 +394,7 @@ function medForm() {
   if (sc.kind === "weekdays") freq = `<div class="opts" role="group" aria-label="Days of the week">${WEEKDAYS.map((d, i) => `<label class="opt"><input type="checkbox" name="days" value="${i}" ${(sc.days || []).map(Number).includes(i) ? "checked" : ""}><span>${d}</span></label>`).join("")}</div>`;
   else if (everyN) freq = `<div class="amount"><span>Every</span><input name="n" type="number" min="1" max="365" inputmode="numeric" required value="${sc.n || 2}" aria-label="Repeat every"><span>${sc.kind === "everyNDays" ? "days" : "weeks"}</span></div><div class="muted">Counts from the start date.</div>${fixedToggle}`;
   else if (sc.kind === "monthly") freq = `<div class="amount"><span>On day</span><input name="dayOfMonth" type="number" min="1" max="31" inputmode="numeric" required value="${sc.dayOfMonth || (m.start ? M.parseDay(m.start).getDate() : new Date().getDate())}" aria-label="Day of the month"><span>of each month</span></div><div class="muted">In shorter months, the last day.</div>${fixedToggle}`;
-  else if (sc.kind === "prn") freq = `<div class="muted">No reminders or missed-dose alerts. Log a dose on the Today screen whenever you take it.</div>`;
+  else if (sc.kind === "prn") freq = `<div class="muted">No reminders or missed-dose alerts. Log a treatment on the Today screen when it happens.</div>`;
   return `<form class="sheet stack" id="medform"><h2>${m.isNew ? "Add medicine" : "Edit medicine"}</h2>
    <div class="field"><label for="f-name">Name</label><input id="f-name" name="name" required value="${esc(m.name)}" placeholder="e.g. Amoxicillin"></div>
    <fieldset class="field"><legend>Type</legend><div class="opts">${Object.entries(M.TYPES).map(([k, t]) => `<label class="opt"><input type="radio" name="type" value="${k}" data-live ${m.type === k ? "checked" : ""}><span><span aria-hidden="true">${t.icon}</span> ${esc(t.label)}</span></label>`).join("")}</div></fieldset>
@@ -385,57 +434,111 @@ function accountCard() {
 function patientView() {
   const pid = S.pid, p = snap(pid), now = new Date();
   switch (S.view) {
-    case "calendar": return header("Calendar", "Your doses by day") + `<div class="stack">${calendarBlock(pid)}</div>`;
-    case "meds": return header("Medicines", p.meds.length + " on your list") + `<div class="stack">${exampleBanner()}${medsBlock(pid)}</div>`;
-    case "more": return header("More", "Pillbox, care team and settings") + `<div class="stack">
-      <section class="sheet stack"><h2>Care team</h2>
-        <p class="muted">Let a family member, caregiver or doctor see your doses and get an alert if you miss one.</p>
-        ${(p.caregivers || []).length ? `<div class="list">${p.caregivers.map(c => `<div class="item"><div><strong>${esc((p.caregiverNames || {})[c] || "Caregiver")}</strong></div><button class="btn-sm btn-danger" data-act="unlink" data-uid="${c}">Remove</button></div>`).join("")}</div>` : ""}
-        ${S.link ? `<div class="code">${S.link.code.slice(0, 3)} ${S.link.code.slice(3)}</div><div class="muted">Have them enter this code in the Pillbox Care app. It works for 24 hours.</div>` : `<button class="btn-primary" data-act="mkcode">Get a link code</button>`}
-      </section>
+    case "calendar": return header("Calendar", "Your doses by day") + `<div class="stack">${viewSwitch()}${calendarBlock(pid)}</div>`;
+    case "meds": return header("Medicines", p.meds.length + " on your list") + `<div class="stack">${viewSwitch()}${exampleBanner()}${medsBlock(pid)}</div>`;
+    case "more": return header("More", "Pillbox, care team and settings") + `<div class="stack">${viewSwitch()}${legacyBanner()}
+      ${careTeamBlock(pid, p)}
       <section class="sheet stack"><h2>Pillbox</h2>
         <div class="row spread"><div><strong>Bluetooth pillbox</strong><div class="muted">${esc(S.ble)}</div></div><button class="btn-sm btn-primary" data-act="ble">Connect</button></div>
         <p class="muted">No pillbox yet? Tap a compartment to test what happens when its lid opens.</p>
         ${p.meds.filter(m => m.slot).length ? `<div class="pack">` + p.meds.filter(m => m.slot).sort((a, b) => a.slot - b.slot).map(m => `<button class="well" data-act="sim" data-slot="${m.slot}"><span class="time">Compartment ${esc(m.slot)}</span><span class="name">${esc(m.name)}</span><span class="dose">Open lid</span></button>`).join("") + `</div>` : `<p class="muted">Assign a compartment to a medicine first.</p>`}
       </section>
-      <section class="sheet stack"><h2>Settings</h2>${remindersCard()}${accountCard()}</section></div>`;
-    default: return header("Today", now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })) + `<div class="stack">${alertBanner()}${exampleBanner()}${todayBlock(pid)}</div>`;
+      <section class="sheet stack"><h2>Settings</h2>${settingsExtras()}${remindersCard()}${accountCard()}</section></div>`;
+    default: return header("Today", now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })) + `<div class="stack">${viewSwitch()}${legacyBanner()}${alertBanner()}${exampleBanner()}${todayBlock(pid)}</div>`;
   }
+}
+
+function accessRows(p) {
+  const ids = [...new Set([...(p.caregiverUids || []), ...(p.caregivers || []), ...Object.keys(p.access || {})])];
+  if (!ids.length) return "";
+  return `<div class="list">${ids.map(c => {
+    const entry = (p.access || {})[c];
+    const name = entry?.name || (p.caregiverNames || {})[c] || "Caregiver";
+    const perm = PERMISSIONS[entry?.permission] || (entry ? entry.permission : "Linked");
+    return `<div class="item"><div><strong>${esc(name)}</strong><div class="muted small">${esc(perm)}</div></div><button class="btn-sm btn-danger" data-act="unlink" data-uid="${c}">Remove</button></div>`;
+  }).join("")}</div>`;
+}
+function qrBlock(payload) {
+  if (!payload || !String(payload).startsWith("pillbox:invite:v1:")) return "";
+  try {
+    const svg = renderSVG(payload, { pixelSize: 6, border: 2, ecc: "M" });
+    return svg.includes("<svg") ? `<div class="qr" aria-hidden="true">${svg}</div>` : "";
+  } catch (e) { return ""; }
+}
+function careTeamBlock(pid, p) {
+  const status = syncStatus(S.store);
+  const linked = accessRows(p);
+  let invite = "";
+  if (S.store.mode === "cloud" && S.invite?.inviteCode) {
+    const exp = new Date(S.invite.expiresAt);
+    invite = `${qrBlock(S.invite.payload)}<div class="code">${esc(S.invite.inviteCode)}</div>
+      <p>This connects someone to <strong>${esc(S.invite.patientName || p.name || "you")}</strong> as <strong>${esc(S.invite.permissionLabel || "")}</strong>. It expires ${esc(exp.toLocaleString())}. The code has no medicines or health details. It works once.</p>
+      <button class="btn-sm" data-act="invite-clear">Done</button>`;
+  } else if (S.store.mode === "cloud") {
+    invite = `<p>Choose what they can do, then share the code. They will see your name before it connects. You can remove them later.</p>
+      <div class="row"><button class="btn-primary" data-act="invite-perm" data-perm="read">View only</button><button data-act="invite-perm" data-perm="logEdit">Can log and edit</button></div>`;
+  }
+  return `<section class="sheet stack"><h2>Care team</h2><div class="banner info"><div><strong>${esc(status.title)}</strong> ${esc(status.detail)}</div></div>
+    ${linked}${invite}</section>`;
+}
+function settingsExtras() {
+  const p = S.profile || {};
+  const rec = p.recommended === "yes" ? "Yes" : p.recommended === "no" ? "No" : p.recommended === "skip" ? "Skipped" : "Not answered";
+  return `<div class="stack-tight"><strong>How you use Pillbox</strong>
+    <div class="muted small">This only changes the screens on this phone. It does not grant access to anyone's medicines.</div>
+    <div class="row"><button class="btn-sm ${p.usePatient ? "btn-primary" : ""}" data-act="role-toggle" data-mode="patient" aria-pressed="${!!p.usePatient}">I take medicines</button>
+    <button class="btn-sm ${p.useCaregiver ? "btn-primary" : ""}" data-act="role-toggle" data-mode="caregiver" aria-pressed="${!!p.useCaregiver}">I help someone</button></div>
+    <div class="muted small">Healthcare professional recommended this app? ${esc(rec)}. That answer is not used for access and is not a medical recommendation.</div>
+    <div class="row"><button class="btn-sm" data-act="export-backup">Export backup</button><button class="btn-sm" data-act="import-backup">Import backup</button></div>
+    <div class="muted small">A backup is a file you keep. Importing it on this phone does not link another person.</div></div>`;
 }
 
 // ---------------- caregiver app ----------------
 function caregiverView() {
-  if (S.view === "settings") return header("Settings", "Pillbox Care") + `<div class="stack"><section class="sheet stack">${remindersCard()}${accountCard()}</section></div>`;
-  if (S.view === "link") return header("Add a patient", "Link with a code") + `<div class="stack">
-    <form class="sheet stack" id="joinform"><p>Ask the patient to open Pillbox, go to <strong>More › Care team</strong> and tap <strong>Get a link code</strong>.</p>
-    <div class="field"><label for="j-code">6-digit code</label><input id="j-code" name="code" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" required placeholder="123 456"></div>
-    ${S.joinError ? `<div class="banner dup">${esc(S.joinError)}</div>` : ""}
-    <button class="btn-primary" type="submit">Link patient</button></form></div>`;
+  if (S.view === "settings") return header("Settings", "People you help") + `<div class="stack">${viewSwitch()}${legacyBanner()}<section class="sheet stack">${settingsExtras()}${remindersCard()}${accountCard()}</section></div>`;
+  if (S.view === "link") return header("Connect", "With a code they give you") + `<div class="stack">${viewSwitch()}${legacyBanner()}${joinBlock()}</div>`;
   if (S.pid && S.snaps[S.pid]) {
     const p = snap(), tabs = [["today", "Today"], ["calendar", "Calendar"], ["meds", "Medicines"]];
     let body = S.sub === "calendar" ? calendarBlock(S.pid) : S.sub === "meds" ? medsBlock(S.pid) : todayBlock(S.pid);
     return header(p.name, "Patient", `<button class="btn-sm" data-act="back">All patients</button>`) + `<div class="stack">${alertBanner()}
       <div class="seg" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${S.sub === k}" data-act="sub" data-sub="${k}">${l}</button>`).join("")}</div>${body}</div>`;
   }
-  // patient list
-  const cards = S.patients.map(pt => {
+  // Own medicines stay in My medicines. This list is only people connected, or records imported onto this phone.
+  const people = S.patients.filter(pt => pt.id !== "me");
+  const cards = people.map(pt => {
     const p = S.snaps[pt.id]; if (!p) return `<div class="pcard"><strong>${esc(pt.name)}</strong><div class="muted">Loading…</div></div>`;
     const st = M.patientStatus(p.meds, p.doses, Date.now()), ad = M.adherence(p.meds, p.doses, 7), ne = M.eventsOn(new Date(), p.events).length;
     const msg = st.missed.length ? st.missed.map(d => d.med.name + " " + fmtTime(d.time)).join(", ") + " not taken" : st.due.length ? st.due.map(d => d.med.name).join(", ") + " due now" : st.total ? "On track today" : "Nothing scheduled today";
+    const local = S.store.mode !== "cloud" || pt.localOnly ? `<div class="muted small">On this phone only. Not a synced link.</div>` : "";
     return `<button class="pcard ${st.level}" data-act="open" data-pid="${pt.id}">
       <div class="row spread" style="flex-wrap:nowrap"><strong class="pname">${esc(p.name)}</strong><span class="chip ${st.level === "ok" ? "taken" : st.level}">${st.level === "ok" ? "OK" : st.level}</span></div>
-      <div>${esc(msg)}</div>
+      <div>${esc(msg)}</div>${local}
       <div class="row muted small"><span>Today ${st.taken}/${st.total}</span><span>7-day ${ad.pct ?? "–"}${ad.pct != null ? "%" : ""}</span>${ne ? `<span>${ne} ${ne === 1 ? "event" : "events"} today</span>` : ""}${st.low.length ? `<span class="stock-low">Refill: ${st.low.map(m => esc(m.name)).join(", ")}</span>` : ""}</div></button>`;
   }).join("");
-  return header("Patients", new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })) + `<div class="stack">${alertBanner()}${exampleBanner()}
-    ${S.patients.length ? `<div class="stack">${cards}</div>` : `<div class="sheet"><h2>No patients yet</h2><p class="muted">Link a patient with the 6-digit code from their Pillbox app.</p></div>`}
-    <div class="row"><button class="btn-primary" data-act="go-link">Add a patient</button></div></div>`;
+  const cardsForPeople = cards;
+  return header("People", new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })) + `<div class="stack">${viewSwitch()}${legacyBanner()}${alertBanner()}${exampleBanner()}
+    ${people.length ? `<div class="stack">${cardsForPeople}</div>` : `<div class="sheet"><h2>No one connected</h2><p class="muted">${S.store.mode === "cloud" ? "When someone creates a code, you can enter it here. You'll see their name before it connects." : "People you help show up here only after a real link. Sync isn't set up, so this phone can't connect to another phone."}</p></div>`}
+    <div class="row"><button class="btn-primary" data-act="go-link">Enter a code</button></div></div>`;
+}
+function joinBlock() {
+  const status = syncStatus(S.store);
+  if (S.store.mode !== "cloud") {
+    return `<section class="sheet stack"><div class="banner info"><div><strong>${esc(status.title)}</strong> ${esc(status.detail)}</div></div>
+      <p>Ask them to open Pillbox, go to <strong>More › Care team</strong>, and create a code after sync is set up. Typing a code here would not connect you, so there is no box for one.</p></section>`;
+  }
+  const preview = S.invitePreview;
+  return `<form class="sheet stack" id="joinform"><div class="banner info"><div><strong>${esc(status.title)}</strong> ${esc(status.detail)}</div></div>
+    <p>Enter their code, or the text from the QR. You'll see who it is before anything connects.</p>
+    <div class="field"><label for="j-code">Code</label><input id="j-code" name="code" autocomplete="off" required placeholder="ABCD-EFGH-JKLM-NPQR" value="${esc(preview?.codeText || "")}"></div>
+    ${preview ? `<div class="banner info"><div>This code connects you to <strong>${esc(preview.patientName)}</strong> as <strong>${esc(preview.permissionLabel || PERMISSIONS[preview.permission] || "")}</strong>. It does not include their medicines.</div></div>
+      <button class="btn-primary" type="button" data-act="invite-accept">Connect</button>` : `<button class="btn-primary" type="submit">Show who this is</button>`}
+    ${S.joinError ? `<div class="banner dup">${esc(S.joinError)}</div>` : ""}</form>`;
 }
 
 // ---------------- auth screen ----------------
 function authView() {
   const a = S.auth, signup = a.mode === "signup";
-  return `<div class="stack auth">${header(isCare() ? "Pillbox Care" : "Pillbox", isCare() ? "For caregivers, family and doctors" : "Your medicine, on time")}
+  return `<div class="stack auth">${header("Pillbox", isCare() ? "Signed-in account" : "Your medicines")}
     <form class="sheet stack" id="authform"><h2>${signup ? "Create account" : "Sign in"}</h2>
       ${signup ? `<div class="field"><label for="a-name">Your name</label><input id="a-name" name="name" required autocomplete="name"></div>` : ""}
       <div class="field"><label for="a-email">Email</label><input id="a-email" name="email" type="email" required autocomplete="email"></div>
@@ -450,9 +553,31 @@ function authView() {
 // ---------------- render ----------------
 const NAV = {
   patient: [["today", "Today"], ["calendar", "Calendar"], ["meds", "Medicines"], ["more", "More"]],
-  caregiver: [["patients", "Patients"], ["link", "Add patient"], ["settings", "Settings"]],
+  caregiver: [["patients", "People"], ["link", "Connect"], ["settings", "Settings"]],
 };
+function onboardView() {
+  const suggested = S.store.suggested || S.profile || { usePatient: !S.legacyCare, useCaregiver: !!S.legacyCare };
+  const step = S.onboardStep || "role";
+  const kept = S.store.mode === "local" && S.store.data && !S.store.data.fresh;
+  const keptLine = kept ? `<div class="banner info"><div><strong>Medicines already on this phone stay here.</strong> Choosing a view does not delete them or grant access to anyone.</div></div>` : "";
+  if (step === "recommend") {
+    return `<div class="stack auth">${header("Pillbox", "One optional question")}${legacyBanner()}
+      <section class="sheet stack"><h2>Did a healthcare professional recommend this app?</h2>
+      <p class="muted">You can skip this. The answer does not change what you can open, and Pillbox does not treat it as a medical recommendation.</p>
+      <div class="row"><button class="btn-primary" data-act="recommend" data-v="yes">Yes</button><button data-act="recommend" data-v="no">No</button><button data-act="recommend" data-v="skip">Skip</button></div></section></div>`;
+  }
+  const choices = [["patient", "I take medicines"], ["caregiver", "I help someone else"], ["both", "Both"]];
+  return `<div class="stack auth">${header("Pillbox", "How will you use it?")}${legacyBanner()}${keptLine}
+    <section class="sheet stack"><h2>Choose what you see</h2>
+    <p class="muted">This is only the screens on this phone. It does not connect you to another person and does not let a view open someone else's medicines.</p>
+    <div class="stack">${choices.map(([k, label]) => `<button class="role-choice" data-act="role-pick" data-mode="${k}">${label}</button>`).join("")}</div>
+    <p class="muted small">Suggested from this install: ${suggested.usePatient && suggested.useCaregiver ? "both" : suggested.useCaregiver ? "helping someone" : "taking medicines"}.</p>
+    </section></div>`;
+}
 function render() {
+  document.documentElement.dataset.role = isCare() ? "caregiver" : "patient";
+  if (!S.profile?.onboarded) { $app.innerHTML = onboardView(); $nav.hidden = true; return; }
+  if (S.store.mode === "cloud" && !S.user) { $app.innerHTML = authView(); $nav.hidden = true; return; }
   if (!S.user) { $app.innerHTML = authView(); $nav.hidden = true; return; }
   $nav.hidden = false;
   const items = NAV[S.role];
@@ -469,11 +594,42 @@ function timeForm(day, scheduled, value, label) {
     ${S.sheet.error ? `<div class="banner dup">${esc(S.sheet.error)}</div>` : ""}
     <div class="row"><button class="btn-primary" type="submit">Save</button><button type="button" data-act="edit-cancel">Cancel</button></div></form>`;
 }
+function editLogForm(d) {
+  const nm = M.normalizeMed(d.med);
+  const units = M.TYPES[nm.type].doseUnits;
+  const amount = S.sheet.amount ?? (d.log?.amount ?? nm.doseAmount);
+  const unit = S.sheet.unit || d.log?.unit || nm.doseUnit;
+  const timeVal = S.sheet.value || M.hm(new Date(d.log.at));
+  return `<form class="stack" id="editform"><div class="field"><label for="e-amt">Amount logged</label>
+    <div class="amount"><input id="e-amt" name="amount" type="number" min="0" step="any" required value="${esc(M.fmtNum(amount))}">
+    <select name="unit" aria-label="Unit">${units.map(u => `<option value="${esc(u)}" ${u === unit ? "selected" : ""}>${esc(u === "units" ? "units (IU)" : u)}</option>`).join("")}</select></div>
+    <div class="muted small">This is the amount that was logged. It does not change the dose saved on the medicine.</div></div>
+    <div class="field"><label for="e-at">Time</label><input id="e-at" name="at" type="time" required value="${esc(timeVal)}"></div>
+    ${S.sheet.error ? `<div class="banner dup">${esc(S.sheet.error)}</div>` : ""}
+    <div class="row"><button class="btn-primary" type="submit">Save log</button><button type="button" data-act="edit-cancel">Cancel</button></div></form>`;
+}
+function additionalForm() {
+  const med = snap(S.sheet.pid).meds.find(m => m.id === S.sheet.medId);
+  if (!med) { S.sheet = null; return ""; }
+  const nm = M.normalizeMed(med);
+  const units = M.TYPES[nm.type].doseUnits;
+  const amount = S.sheet.amount ?? nm.doseAmount;
+  const unit = S.sheet.unit || nm.doseUnit;
+  const atLocal = S.sheet.atLocal || (dayKey(new Date()) + "T" + M.hm(new Date()));
+  return `<form class="stack" id="addform"><div class="eyebrow">Log actual treatment</div><h2>${esc(med.name)}</h2>
+    <p class="muted">This adds a record of what was given. It does not change the prescription, and it does not move reminders.</p>
+    <div class="field"><label for="a-amt">Amount</label><div class="amount"><input id="a-amt" name="amount" type="number" min="0" step="any" required value="${esc(M.fmtNum(amount))}">
+    <select name="unit" aria-label="Unit">${units.map(u => `<option value="${esc(u)}" ${u === unit ? "selected" : ""}>${esc(u === "units" ? "units (IU)" : u)}</option>`).join("")}</select></div></div>
+    <div class="field"><label for="a-at">When</label><input id="a-at" name="at" type="datetime-local" required max="${dayKey(new Date()) + "T" + M.hm(new Date())}" value="${esc(atLocal)}"></div>
+    ${S.sheet.error ? `<div class="banner dup">${esc(S.sheet.error)}</div>` : ""}
+    <div class="row"><button class="btn-primary" type="submit">Save log</button><button type="button" data-act="close-sheet">Cancel</button></div></form>`;
+}
 function sheetView() {
   if (!S.sheet) return "";
   const { pid, key } = S.sheet, p = snap(pid);
   const wrap = body => `<div class="overlay" data-act="close-sheet"><div class="panel" role="dialog" aria-label="Dose details">${body}<button class="btn-quiet" data-act="close-sheet">Close</button></div></div>`;
   if (S.sheet.ev) return `<div class="overlay" data-act="close-sheet"><div class="panel" role="dialog" aria-label="${S.sheet.evId ? "Edit event" : "Log event"}">${eventSheet()}</div></div>`;
+  if (S.sheet.additional) return wrap(additionalForm());
   if (S.sheet.group) {
     const list = M.dosesOn(new Date(), p.meds, p.doses, opts()).filter(d => d.time === S.sheet.time && !d.log);
     if (!list.length) { S.sheet = null; return ""; }
@@ -484,18 +640,23 @@ function sheetView() {
   if (!d) { S.sheet = null; return ""; }
   const who = d.log ? (d.log.byName && d.log.by === "caregiver" ? " by " + esc(d.log.byName) : "") + (d.log.source === "pillbox" ? " (pillbox)" : "") : "";
   let actions;
-  if (S.sheet.edit) actions = timeForm(d.day, d.time, d.log ? M.hm(new Date(d.log.at)) : "", d.log ? "Taken at" : "When did you take it?");
-  else if (d.log) actions = `<div class="row">${d.log.status === "taken" ? `<button data-act="edit-time" data-pid="${pid}" data-key="${d.key}">Change time</button>` : ""}<button data-act="undo" data-pid="${pid}" data-key="${d.key}">Undo</button></div>`;
-  else actions = `<button class="btn-primary" data-act="take-key" data-pid="${pid}" data-key="${d.key}">Taken now</button>
-      <button data-act="edit-time" data-pid="${pid}" data-key="${d.key}">Taken earlier?</button>
-      <button class="btn-quiet" data-act="skip" data-pid="${pid}" data-key="${d.key}">Skip this dose</button>`;
+  if (S.sheet.edit && d.log) actions = editLogForm(d);
+  else if (S.sheet.edit) actions = timeForm(d.day, d.time, "", "When was it logged?");
+  else if (d.log && d.log.status === "taken") actions = `<div class="row"><button data-act="edit-time" data-pid="${pid}" data-key="${d.key}">Correct this log</button><button data-act="undo" data-pid="${pid}" data-key="${d.key}">Undo</button><button class="btn-danger" data-act="remove-log" data-pid="${pid}" data-key="${d.key}">${S.sheet.confirmRemove ? "Remove log" : "Remove this log"}</button></div>
+    <p class="muted small">Removing a log takes it out of history and puts the supply back. It does not change the schedule. Skip is different: that marks a scheduled dose which isn't logged as not taken, and leaves it on the schedule.</p>`;
+  else if (d.log) actions = `<div class="row"><button data-act="undo" data-pid="${pid}" data-key="${d.key}">Undo skip</button></div><p class="muted small">This scheduled dose stays on the schedule as not taken.</p>`;
+  else actions = `<button class="btn-primary" data-act="take-key" data-pid="${pid}" data-key="${d.key}">Log ${esc(M.doseLabel(d.med))} now</button>
+      <button data-act="edit-time" data-pid="${pid}" data-key="${d.key}">Log at another time</button>
+      <button class="btn-quiet" data-act="skip" data-pid="${pid}" data-key="${d.key}">Skip this scheduled dose</button>
+      <p class="muted small">Skip marks this scheduled dose as not taken. The schedule stays. This does not delete later doses.</p>`;
   return wrap(`<div class="eyebrow">${esc(M.medSummary(d.med))}</div><h2>${esc(d.med.name)} ${esc(d.med.strength)}</h2>${d.med.notes ? `<div class="muted">${esc(d.med.notes)}</div>` : ""}
     <p class="dose-times"><strong>${esc(M.fmtDoseTimes(d))}</strong>${who}</p>${actions}`);
 }
 function route() {
   const h = location.hash.slice(1), valid = NAV[S.role].map(x => x[0]);
   S.view = valid.includes(h) ? h : valid[0];
-  if (isCare() && S.view !== "patients") S.pid = null;
+  if (!isCare()) S.pid = S.patients.find(p => p.id === "me")?.id || S.patients.find(p => p.owner)?.id || S.pid;
+  if (isCare() && (S.view !== "patients" || S.pid === "me")) S.pid = null;
   S.editing = null; S.sheet = null; S.joinError = ""; S.medDetail = null; S.stockForm = null;
   render(); window.scrollTo(0, 0);
 }
@@ -572,21 +733,19 @@ document.addEventListener("click", async e => {
     switch (act) {
       case "well": {
         const d = findDose(pid, el.dataset.key);
-        if (d && !d.log) { if (await takeDose(pid, d)) toast(d.med.name + " marked taken", d.key); }
+        if (d && !d.log) { const res = await takeDose(pid, d); if (res && res.code === "applied") toast(doseResultMessage(res, d.med), res.key); }
         else S.sheet = { pid, key: el.dataset.key };
         break;
       }
-      case "take-group": {
-        const list = M.dosesOn(new Date(), snap(pid).meds, snap(pid).doses, opts()).filter(d => d.time === el.dataset.time && !d.log);
-        for (const d of list) await takeDose(pid, d);
-        toast(list.length + (list.length === 1 ? " dose" : " doses") + " marked taken");
-        break;
-      }
-      case "take-key": { const d = findDose(pid, el.dataset.key); if (d) await takeDose(pid, d); S.sheet = null; break; }
+      case "take-key": { const d = findDose(pid, el.dataset.key); if (d) { const res = await takeDose(pid, d); if (res && res.code === "applied") toast(doseResultMessage(res, d.med), res.key); } S.sheet = null; break; }
       case "skip": { const d = findDose(pid, el.dataset.key); if (d) await skipDose(pid, d); S.sheet = null; toast("Dose skipped"); break; }
       case "undo": await undoDose(pid, el.dataset.key); S.sheet = null; document.getElementById("toast").hidden = true; toast("Undone"); break;
-      case "take-prn": await takeExtra(pid, snap(pid).meds.find(m => m.id === el.dataset.med)); break;
-      case "force": await takeExtra(S.pid, snap().meds.find(m => m.id === el.dataset.med), true); S.alert = null; break;
+      case "take-prn": await logAdditional(pid, snap(pid).meds.find(m => m.id === el.dataset.med)); break;
+      case "log-additional": S.sheet = { pid, additional: true, medId: el.dataset.med }; break;
+      case "force": await logAdditional(S.pid, snap().meds.find(m => m.id === el.dataset.med), new Date(), null, null, true); S.alert = null; break;
+      case "remove-log":
+        if (!S.sheet?.confirmRemove) { S.sheet = { ...(S.sheet || { pid, key: el.dataset.key }), pid, key: el.dataset.key || S.sheet?.key, confirmRemove: true }; break; }
+        await undoDose(pid, el.dataset.key || S.sheet.key); S.sheet = null; toast("Log removed"); break;
       case "dismiss": S.alert = null; break;
       case "close-sheet": S.sheet = null; break;
       case "open-sheet": S.sheet = { pid, key: el.dataset.key }; break;
@@ -622,7 +781,68 @@ document.addEventListener("click", async e => {
       }
       case "delete": readForm(); if (!S.editing.confirmDelete) { S.editing.confirmDelete = true; break; } if (!isCare()) await N.removeMedFromCalendar(S.editing.calendarEventIds || []); await S.store.deleteMed(S.pid, S.editing.id); S.editing = null; S.medDetail = null; toast("Medicine deleted"); break;
       case "perm": S.perm = await N.askReminderPermission(); if (!isCare()) await N.scheduleReminders(snap().meds, snap().doses); break;
-      case "mkcode": S.link = await S.store.createLinkCode(S.pid); break;
+      case "invite-perm": S.invite = await S.store.createInvite(S.pid, el.dataset.perm); break;
+      case "invite-clear": S.invite = null; break;
+      case "invite-accept": {
+        const res = await S.store.acceptInvite(S.invitePreview?.codeText || "");
+        if (!res?.ok) { S.joinError = res?.message || "That code didn't connect."; break; }
+        S.invitePreview = null; S.joinError = "";
+        if (res.patientId) S.pid = res.patientId;
+        toast("Connected to " + (res.patientName || "them"));
+        location.hash = "patients";
+        return;
+      }
+      case "role-pick":
+        S.draftUse = el.dataset.mode === "both" ? { usePatient: true, useCaregiver: true } : el.dataset.mode === "caregiver" ? { usePatient: false, useCaregiver: true } : { usePatient: true, useCaregiver: false };
+        S.onboardStep = "recommend";
+        break;
+      case "recommend":
+        applyUse(S.draftUse?.usePatient !== false, !!S.draftUse?.useCaregiver, el.dataset.v, S.draftUse?.usePatient === false ? "caregiver" : "patient");
+        break;
+      case "role-toggle": {
+        const nextPatient = el.dataset.mode === "patient" ? !S.profile?.usePatient : !!S.profile?.usePatient;
+        const nextCare = el.dataset.mode === "caregiver" ? !S.profile?.useCaregiver : !!S.profile?.useCaregiver;
+        if (!nextPatient && !nextCare) { toast("Keep at least one."); break; }
+        const view = !nextCare && isCare() ? "patient" : !nextPatient && !isCare() ? "caregiver" : S.activeView;
+        applyUse(nextPatient, nextCare, S.profile?.recommended || "skip", view);
+        const hash = view === "caregiver" ? "#patients" : "#today";
+        if (location.hash !== hash) { location.hash = hash; return; }
+        break;
+      }
+      case "switch-view": {
+        const view = el.dataset.view === "caregiver" ? "caregiver" : "patient";
+        setActiveView(view);
+        const hash = view === "caregiver" ? "#patients" : "#today";
+        if (location.hash !== hash) { location.hash = hash; return; }
+        S.view = view === "caregiver" ? "patients" : "today";
+        if (view === "caregiver") S.pid = null;
+        else S.pid = S.patients.find(p => p.id === "me")?.id || S.patients.find(p => p.owner)?.id || S.pid;
+        break;
+      }
+      case "export-backup": {
+        const data = S.store.exportBackup?.();
+        if (!data) { toast("There's nothing to export from a signed-in account on this screen."); break; }
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob); a.download = "pillbox-backup.json";
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+        toast("Backup downloaded. Moving the file does not link another phone.");
+        break;
+      }
+      case "import-backup": {
+        const input = document.createElement("input");
+        input.type = "file"; input.accept = "application/json,.json";
+        input.onchange = async () => {
+          try {
+            const plan = S.store.importBackup(JSON.parse(await input.files[0].text()));
+            toast(plan.message || "Couldn't import that file.");
+          } catch (err) { toast("Couldn't read that file."); }
+          render();
+        };
+        input.click();
+        return;
+      }
       case "unlink": await S.store.removeCaregiver(S.pid, el.dataset.uid); toast("Removed"); break;
       case "ble": N.connectPillbox(slot => lidOpened(slot, "pillbox").catch(err => toast(err.message || String(err))), s => { S.ble = s; render(); }); return;
       case "sim": await lidOpened(Number(el.dataset.slot), "simulated"); break;
@@ -669,8 +889,15 @@ document.addEventListener("submit", async e => {
       const when = list[0].log ? M.editedLogTime(list[0].log.at, picked) : M.logTimeFor(list[0].day, list[0].time, picked);
       if (!when) { sh.error = "That time hasn't happened yet."; render(); return; }
       let label = M.fmtLogged({ status: "taken", at: when.toISOString() }, list[0].day); label = label[0].toLowerCase() + label.slice(1);
-      if (list[0].log) { await setDoseTime(sh.pid, list[0].key, when); toast("Changed to " + label); }
-      else { for (const d of list) await takeDose(sh.pid, d, "app", when); toast((list.length === 1 ? list[0].med.name : list.length + " doses") + " " + label); }
+      if (list[0].log) {
+        await commit(sh.pid, { opId: M.uid(), kind: "edit", medId: list[0].med.id, key: list[0].key, amount: list[0].log.amount, unit: list[0].log.unit, at: when.toISOString() });
+        toast("Changed to " + label);
+      } else {
+        const saved = [];
+        for (const d of list) { const res = await takeDose(sh.pid, d, "app", when); if (res && res.code === "applied") saved.push(res); }
+        if (saved.length === 1) toast(doseResultMessage(saved[0], list[0].med), saved[0].key);
+        else if (saved.length) toast(saved.length + " treatments logged");
+      }
       S.sheet = null;
     } else if (f.id === "evform") {
       readEventForm(); const sh = S.sheet, ev = sh.ev, when = new Date(ev.atLocal); // datetime-local: local time
@@ -682,6 +909,25 @@ document.addEventListener("submit", async e => {
         ...(was ? { editedBy: S.role, editedByName: name } : { by: S.role, byName: name, createdAt: Date.now() }) };
       await S.store.saveEvent(sh.pid, rec);
       S.sheet = null; toast(was ? "Event saved" : M.EVENT_TYPES[rec.type].label + " logged");
+    } else if (f.id === "editform") {
+      const sh = S.sheet, d = findDose(sh.pid, sh.key);
+      if (!d?.log) { S.sheet = null; render(); return; }
+      const fd = new FormData(f);
+      const when = M.editedLogTime(d.log.at, fd.get("at"));
+      if (!when) { sh.error = "That time hasn't happened yet."; render(); return; }
+      const amount = Number(fd.get("amount"));
+      if (!(amount > 0)) { sh.error = "Enter the amount that was logged."; render(); return; }
+      await commit(sh.pid, { opId: M.uid(), kind: "edit", medId: d.med.id, key: d.key, amount, unit: fd.get("unit"), at: when.toISOString() });
+      toast("Log updated"); S.sheet = null;
+    } else if (f.id === "addform") {
+      const sh = S.sheet, med = snap(sh.pid).meds.find(m => m.id === sh.medId);
+      const fd = new FormData(f), when = new Date(fd.get("at"));
+      if (!med || isNaN(when.getTime())) { sh.error = "Pick when it happened."; render(); return; }
+      if (when.getTime() > Date.now() + 60000) { sh.error = "That time hasn't happened yet."; render(); return; }
+      const amount = Number(fd.get("amount"));
+      if (!(amount > 0)) { sh.error = "Enter the amount that was logged."; render(); return; }
+      const res = await logAdditional(sh.pid, med, when, amount, fd.get("unit"), true);
+      if (res) S.sheet = null;
     } else if (f.id === "stockform") {
       const fd = new FormData(f), n = Number(fd.get("n")), note = (fd.get("note") || "").trim();
       const m = snap().meds.find(x => x.id === S.medDetail); if (!m || !(n >= 0)) return;
@@ -689,11 +935,17 @@ document.addEventListener("submit", async e => {
       else { if (typeof m.stock !== "number") await S.store.saveMed(S.pid, { ...m, stock: 0 }); await adjustStock(S.pid, m.id, n - (m.stock || 0), stockEv("adjust", note)); toast("Count saved"); }
       S.stockForm = null;
     } else if (f.id === "joinform") {
-      const code = new FormData(f).get("code").replace(/\D/g, "");
-      const pid = await S.store.joinWithCode(code); S.joinError = ""; location.hash = "patients"; S.pid = pid; toast("Patient linked");
+      const code = new FormData(f).get("code");
+      const preview = await S.store.previewInvite(code);
+      if (!preview?.ok) { S.joinError = preview?.message || "That code didn't work."; S.invitePreview = null; }
+      else { S.joinError = ""; S.invitePreview = { ...preview, codeText: code }; }
     } else if (f.id === "authform") {
       const fd = Object.fromEntries(new FormData(f));
       S.auth.error = "";
+      if (S.auth.mode === "signup") {
+        fd.usePatient = !!S.profile?.usePatient;
+        fd.useCaregiver = !!S.profile?.useCaregiver;
+      }
       S.user = S.auth.mode === "signup" ? await S.store.signUp(fd) : await S.store.signIn(fd);
       await afterLogin();
     }
@@ -748,8 +1000,9 @@ async function onReminderAction(a) {
   if (!pid || !S.snaps[pid]) { queuedActions.push(a); return; }
   const p = snap(pid), list = M.dosesForReminder(extra, p.meds, p.doses);
   try {
-    for (const d of list) await takeDose(pid, d, "reminder");
-    if (list.length) toast("Marked taken from the reminder");
+    let logged = 0;
+    for (const d of list) { const res = await takeDose(pid, d, "reminder"); if (res && res.code === "applied") logged++; }
+    if (logged) toast(logged === 1 ? "Logged from the reminder" : logged + " treatments logged from the reminder");
   } catch (err) { toast(err.message || String(err)); }
   if (!busy()) render();
 }
@@ -764,7 +1017,7 @@ function wirePatients() {
     S.patients = list;
     for (const p of list) if (!watchers.has(p.id)) watchers.set(p.id, S.store.watchPatient(p.id, d => onSnap(p.id, d)));
     for (const [id, un] of watchers) if (!list.find(p => p.id === id)) { un(); watchers.delete(id); delete S.snaps[id]; }
-    if (!isCare()) { S.pid = list[0]?.id || null; runQueuedReminderActions(); }
+    if (!isCare()) { S.pid = list.find(p => p.id === "me")?.id || list.find(p => p.owner)?.id || list[0]?.id || null; runQueuedReminderActions(); }
     render();
   });
 }
@@ -776,10 +1029,12 @@ async function afterLogin() {
 }
 
 async function boot() {
-  try { S.role = await N.detectRole(); } catch (e) { S.role = "patient"; }
-  document.title = isCare() ? "Pillbox Care" : "Pillbox";
-  document.documentElement.dataset.role = S.role;
-  S.store = makeStore(S.role);
+  try { S.legacyCare = (await N.detectApp()).legacyCarePackage; } catch (e) { S.legacyCare = false; }
+  document.title = "Pillbox";
+  S.store = makeStore({ legacyCarePackage: S.legacyCare });
+  S.profile = readProfile() || S.store.profile || null;
+  if (S.profile?.onboarded) writeProfile(S.profile);
+  setActiveView(chooseView(S.profile || S.store.suggested || { usePatient: !S.legacyCare, useCaregiver: !!S.legacyCare }));
   window.addEventListener("hashchange", route);
   $app.innerHTML = `<p class="muted" style="padding-top:40px">Loading…</p>`;
   try { S.user = await S.store.init(); } catch (e) { $app.innerHTML = `<div class="banner dup">Couldn't start: ${esc(e.message)}</div>`; return; }

@@ -4,20 +4,22 @@ import { fmtTime, dosesOn, reminderPlan, doseLabel, scheduleLabel, recurrenceOf,
 
 export const isNative = Capacitor.isNativePlatform();
 
-// Which app is this? The two APKs differ only by application id.
-export async function detectRole() {
+// Which installed package is this? com.pillbox.care is the older separate app.
+// It does not choose access. The unified app (com.pillbox.patient) asks how the person will use Pillbox.
+// `?role=care` still opens the legacy-package preview in a browser.
+export async function detectApp() {
   const q = new URLSearchParams(location.search).get("role");
-  if (q) return q === "care" || q === "caregiver" ? "caregiver" : "patient";
+  let legacyCarePackage = q === "care" || q === "caregiver";
   if (isNative) {
     try {
       const { App } = await import("@capacitor/app");
       // Never `return App` / `await App` from an async function: Capacitor plugin proxies trap
       // `.then`, so JS treats them as thenables and the await hangs forever on native.
       const info = await App.getInfo();
-      return info.id.endsWith(".care") ? "caregiver" : "patient";
+      legacyCarePackage = String(info.id || "").endsWith(".care");
     } catch (e) {}
   }
-  return "patient";
+  return { legacyCarePackage };
 }
 
 // ---------------- Reminders (real Android alarms) ----------------
