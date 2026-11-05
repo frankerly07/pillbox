@@ -97,6 +97,26 @@ function toast(text, undo) {
   el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (el.hidden = true), undo ? 6000 : 3200);
 }
 
+// "Add to my calendar" (patient app). Updates m.addToCalendar / m.calendarEventIds in place; the caller saves m
+// and shows the returned message (if any) as a toast.
+// Events are (re)made when it's turned on or the schedule, dose or name changes; removed when it's turned off.
+const calKey = m => JSON.stringify([m.name, m.strength, m.type, m.doseAmount, m.doseUnit, m.times, m.schedule, m.start || null, m.end || null]);
+async function syncCalendar(before, m) {
+  if (isCare()) return;
+  const was = !!before?.addToCalendar, ids = before?.calendarEventIds || [];
+  if (!m.addToCalendar || M.isPrn(m)) {
+    m.addToCalendar = false; m.calendarEventIds = [];
+    if (!was) return "";
+    await N.removeMedFromCalendar(ids);
+    return ids.length ? "Removed from your calendar" : "Calendar off. Delete the events in your calendar app if you added the file.";
+  }
+  if (was && calKey(before) === calKey(m)) return "";
+  if (was) await N.removeMedFromCalendar(ids);
+  const r = await N.addMedToCalendar(m, snap().doses);
+  m.addToCalendar = r.ok; m.calendarEventIds = r.ids || [];
+  return r.message;
+}
+
 // ---------------- shared pieces ----------------
 const header = (title, sub, right = "") => `<header class="top"><div style="min-width:0"><div class="eyebrow">${esc(sub)}</div><h1>${esc(title)}</h1></div>${right}</header>`;
 function alertBanner() {
@@ -118,6 +138,18 @@ function wells(pid, list) {
     ${d.log && d.log.by === "patient" && isCare() && d.log.source === "pillbox" ? `<span class="muted small">from pillbox</span>` : ""}</button>`).join("") + `</div>`;
 }
 
+// Patient Today: on-time rates, streak and badges.
+function progressCard(pid) {
+  const p = snap(pid);
+  if (!p.meds.some(m => !M.isPrn(m))) return "";
+  const a = M.adherenceProgress(p.meds, p.doses);
+  const bar = (label, r) => `<div class="prog-row"><span>${label}</span><div class="meter" role="progressbar" aria-label="${label} on time" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${r.pct ?? 0}"><i style="width:${r.pct ?? 0}%"></i></div><span class="mono">${r.pct ?? "–"}${r.pct != null ? "%" : ""}</span></div>`;
+  return `<section class="next stack-tight progress"><div class="row spread"><div class="eyebrow">On time (within ${M.ON_TIME_WINDOW_MIN} min)</div><div><span class="big-sm mono">${a.streak}</span> <span class="muted">${a.streak === 1 ? "day" : "days"} streak</span></div></div>
+    ${bar("7 days", a.rate7)}${bar("30 days", a.rate30)}
+    ${a.badges.length ? `<div class="badges">${a.badges.map(b => `<span class="badge" title="${esc(b.label)}"><span aria-hidden="true">${b.emoji}</span> ${esc(b.label)}</span>`).join("")}</div>` : ""}
+    <div class="muted">${esc(a.message)}</div></section>`;
+}
+
 function todayBlock(pid) {
   const p = snap(pid), now = new Date(), list = M.dosesOn(now, p.meds, p.doses, opts());
   const groupDue = list.filter(d => (d.status === "due" || d.status === "missed") && !d.log);
@@ -136,6 +168,7 @@ function todayBlock(pid) {
     h += `<section class="next"><div class="row spread"><div><div class="eyebrow">Next dose</div>${upcoming ? `<div class="big time">${fmtTime(upcoming.time)}</div><div><strong>${esc(upcoming.med.name)}</strong> ${esc(upcoming.med.strength)}</div><div class="muted">in ${M.rel(upcoming.when - now)}</div>` : `<div class="big">All done</div><div class="muted">${list.length ? "No more doses today." : "No scheduled doses."}</div>`}</div>
       <div style="text-align:right"><div class="eyebrow">Taken</div><div class="big mono">${taken}/${list.length}</div></div></div></section>`;
   }
+  if (!isCare()) h += progressCard(pid);
   h += `<section class="stack"><h2>Today's doses</h2>`;
   h += list.length ? wells(pid, list) : `<p class="muted">${isCare() ? "No scheduled doses today." : "Add a medicine with times and it shows up here."}</p>`;
   h += `</section>`;
@@ -146,6 +179,16 @@ function todayBlock(pid) {
   return h;
 }
 
+const CAL_STATUS = { taken: "Taken", skipped: "Skipped", missed: "Missed", due: "Due", upcoming: "Upcoming" };
+// The "actual" side of a calendar day row: when it was taken (and how far off schedule), or why not.
+function actualText(d) {
+  if (d.status === "missed") return `<strong class="stock-low">Missed · not taken</strong>`;
+  if (!d.log) return `<span class="muted">Not taken yet</span>`;
+  const t = new Date(d.log.at), off = t.getTime() - d.when;
+  const logged = esc(M.fmtLogged(d.log, d.day)).replace(/(\d{1,2}:\d{2} [AP]M)$/, `<strong class="mono">$1</strong>`);
+  if (d.log.status !== "taken") return logged;
+  return logged + (M.isOnTime(d) ? ` <span class="ontime">· on time</span>` : ` <span class="late">· ${M.rel(off)} ${off > 0 ? "late" : "early"}</span>`);
+}
 function calendarBlock(pid) {
   const p = snap(pid), { y, m, sel } = S.cal, first = new Date(y, m, 1), days = new Date(y, m + 1, 0).getDate();
   const title = first.toLocaleDateString(undefined, { month: "long", year: "numeric" });
@@ -164,10 +207,15 @@ function calendarBlock(pid) {
     <div class="cal"><div class="cal-head">${["S", "M", "T", "W", "T", "F", "S"].map(x => `<span>${x}</span>`).join("")}</div><div class="cal-grid">${cells}</div></div>
     <div class="legend"><span><i class="lg all"></i>All taken</span><span><i class="lg some"></i>Some missed</span><span><i class="lg none"></i>None taken</span></div>
     <div class="next"><div class="eyebrow">Last 30 days</div><div class="big mono">${ad.pct ?? "–"}${ad.pct != null ? "%" : ""}</div><div class="muted">${ad.taken} of ${ad.total} scheduled doses taken</div></div>
-    <h2>${selDate.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</h2>
-    ${sum.list.length || extras.length ? `<div class="list">` + sum.list.map(d => `<div class="item"><div><strong>${fmtTime(d.time)}</strong> ${esc(d.med.name)} <span class="chip ${d.status}">${d.status}</span><div class="muted">${d.log ? esc(M.fmtLogged(d.log, d.day)) + (d.log.by === "caregiver" ? " by " + esc(d.log.byName || "caregiver") : "") + (d.log.source === "pillbox" ? " · pillbox" : "") : ""}</div></div>
+    <h2 id="day-detail">${selDate.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</h2>
+    ${sum.list.length ? `<div class="muted">${sum.taken} of ${sum.total} scheduled doses taken${sum.list.some(d => d.status === "missed") ? ` · <span class="stock-low">${sum.list.filter(d => d.status === "missed").length} missed</span>` : ""}</div>` : ""}
+    ${sum.list.length || extras.length ? `<div class="list day-list">` + sum.list.map(d => `<div class="item dd ${d.status}"><div class="stack-tight">
+        <div><span aria-hidden="true">${M.typeIcon(d.med)}</span> <strong>${esc(d.med.name)}</strong> ${esc(d.med.strength || "")} <span class="chip ${d.status}">${CAL_STATUS[d.status] || d.status}</span></div>
+        <div class="dd-amt">${esc(M.doseLabel(d.med))}</div>
+        <div class="dd-times"><span>Scheduled <strong class="mono">${fmtTime(d.time)}</strong></span><span>${actualText(d)}</span></div>
+        ${d.log && (d.log.by === "caregiver" || d.log.source === "pillbox") ? `<div class="muted small">${d.log.by === "caregiver" ? "Logged by " + esc(d.log.byName || "caregiver") : ""}${d.log.by === "caregiver" && d.log.source === "pillbox" ? " · " : ""}${d.log.source === "pillbox" ? "From pillbox" : ""}</div>` : ""}</div>
       ${d.log ? `<button class="btn-sm" data-act="undo" data-pid="${pid}" data-key="${d.key}">Undo</button>` : d.status !== "upcoming" ? `<button class="btn-sm btn-primary" data-act="open-sheet" data-pid="${pid}" data-key="${d.key}">Log…</button>` : ""}</div>`).join("")
-      + extras.map(([k, v]) => { const med = p.meds.find(x => x.id === v.medId); return `<div class="item"><div><strong>${fmtClock(v.at)}</strong> ${esc(med ? med.name : "Medicine")} <span class="chip taken">extra</span></div><button class="btn-sm" data-act="open-sheet" data-pid="${pid}" data-key="${k}">Details</button></div>`; }).join("") + `</div>` : `<p class="muted">Nothing scheduled.</p>`}
+      + extras.map(([k, v]) => { const med = p.meds.find(x => x.id === v.medId); return `<div class="item dd taken"><div class="stack-tight"><div>${med ? `<span aria-hidden="true">${M.typeIcon(med)}</span> ` : ""}<strong>${esc(med ? med.name : "Medicine")}</strong> ${esc(med?.strength || "")} <span class="chip taken">extra</span></div>${med ? `<div class="dd-amt">${esc(M.doseLabel(med))}</div>` : ""}<div class="dd-times"><span>As needed</span><span>Taken <strong class="mono">${fmtClock(v.at)}</strong></span></div></div><button class="btn-sm" data-act="open-sheet" data-pid="${pid}" data-key="${k}">Details</button></div>`; }).join("") + `</div>` : `<p class="muted">Nothing scheduled.</p>`}
   </section>`;
 }
 
@@ -211,6 +259,8 @@ function medDetail(pid, m) {
      ${!M.isPrn(m) ? `<div class="muted">${m.times.map(fmtTime).join(", ")}${m.start ? " · from " + fmtDate(M.parseDay(m.start)) : ""}${m.end ? " to " + fmtDate(M.parseDay(m.end)) : ""}</div>` : ""}
      ${m.prescribedBy ? `<div class="muted">Prescribed by ${esc(m.prescribedBy)}</div>` : ""}
      ${m.updatedByName ? `<div class="muted small">Last changed by ${esc(m.updatedByName)}${m.updatedByRole === "caregiver" ? " (care team)" : ""}${m.updatedAt ? " on " + fmtDate(new Date(m.updatedAt)) : ""}</div>` : ""}</div>
+     ${!isCare() && !M.isPrn(m) ? `<div class="row spread" style="flex-wrap:nowrap"><div><strong>Add to my calendar</strong><div class="muted small">${m.addToCalendar ? (m.calendarEventIds?.length ? "On. Repeating events are in your phone's calendar." : "On. Added with a calendar file.") : "Off. Puts each dose in your phone's calendar."}</div></div>
+       <button class="btn-sm ${m.addToCalendar ? "" : "btn-primary"}" role="switch" aria-checked="${!!m.addToCalendar}" data-act="cal-toggle" data-med="${m.id}">${m.addToCalendar ? "Turn off" : "Turn on"}</button></div>` : ""}
      <div class="supply-grid">
        <div><div class="eyebrow">${esc(cap(M.unitName(u)))} left</div><div class="big mono">${s.left != null ? M.fmtNum(s.left) : "–"}</div></div>
        <div><div class="eyebrow">Per dose</div><div class="big mono">${M.fmtNum(s.perDose)}</div></div>
@@ -250,6 +300,7 @@ function medForm() {
    <div class="field"><label for="f-freq">How often</label><select id="f-freq" name="freq" data-live>${FREQ.map(([k, l]) => opt(k, l, sc.kind)).join("")}</select>${freq}</div>
    ${sc.kind !== "prn" ? `<div class="field"><label>Times of day</label><div class="times" id="f-times">${(m.times || []).map((t, i) => `<span class="t"><input type="time" id="f-time-${i}" value="${t}" aria-label="Dose time ${i + 1}"><button type="button" class="btn-quiet btn-sm" data-act="rmtime" data-i="${i}" aria-label="Remove time">✕</button></span>`).join("")}
      <button type="button" class="btn-sm" data-act="addtime">Add time</button></div></div>` : ""}
+   ${!isCare() && sc.kind !== "prn" ? `<label class="opt"><input type="checkbox" name="addToCalendar" ${m.addToCalendar ? "checked" : ""}><span>📅 Add to my calendar</span></label>` : ""}
    <div class="grid2"><div class="field"><label for="f-start">Start date</label><input id="f-start" name="start" type="date" ${everyN ? "required" : ""} value="${esc(m.start || "")}"></div>
    <div class="field"><label for="f-end">End date (optional)</label><input id="f-end" name="end" type="date" value="${esc(m.end || "")}"></div></div>
    <h3>Supply</h3>
@@ -413,6 +464,7 @@ function readForm() {
   if (kind === "weekdays" && !sc.days) sc.days = [(fd.get("start") ? M.parseDay(fd.get("start")) : new Date()).getDay()];
   if (has("n")) sc.n = Number(fd.get("n")) || 1;
   if (has("fixed")) sc.fixed = fd.has("fixed");
+  if (has("addToCalendar")) m.addToCalendar = fd.has("addToCalendar");
   if (has("dayOfMonth")) sc.dayOfMonth = Number(fd.get("dayOfMonth")) || 1;
   const refillAt = Number(fd.get("refillAt") || 0), defaultAt = t => t === "pill" ? 5 : 1;
   Object.assign(m, {
@@ -487,7 +539,7 @@ document.addEventListener("click", async e => {
       case "clear-examples": S.store.clearExamples(); S.snaps = {}; if (!isCare()) S.pid = "me"; break;
       case "cal-prev": S.cal.m--; if (S.cal.m < 0) { S.cal.m = 11; S.cal.y--; } break;
       case "cal-next": S.cal.m++; if (S.cal.m > 11) { S.cal.m = 0; S.cal.y++; } break;
-      case "cal-sel": S.cal.sel = el.dataset.day; break;
+      case "cal-sel": S.cal.sel = el.dataset.day; render(); document.getElementById("day-detail")?.scrollIntoView({ behavior: "smooth", block: "start" }); return;
       case "new": S.editing = { ...M.normalizeMed({ id: M.uid(), name: "", strength: "", type: "pill", doseAmount: 1, times: ["08:00"], schedule: { kind: "daily" }, start: dayKey(new Date()), stock: 30, refillAt: 5, slot: null, notes: "", color: M.COLORS[snap().meds.length % M.COLORS.length] }), isNew: true }; break;
       case "edit": S.editing = M.normalizeMed(structuredClone(snap().meds.find(m => m.id === el.dataset.med))); break;
       case "cancel": S.editing = null; break;
@@ -498,7 +550,12 @@ document.addEventListener("click", async e => {
       case "stock-cancel": S.stockForm = null; break;
       case "addtime": readForm(); S.editing.times.push(S.editing.times.length ? "20:00" : "08:00"); break;
       case "rmtime": readForm(); S.editing.times.splice(Number(el.dataset.i), 1); break;
-      case "delete": readForm(); if (!S.editing.confirmDelete) { S.editing.confirmDelete = true; break; } await S.store.deleteMed(S.pid, S.editing.id); S.editing = null; S.medDetail = null; toast("Medicine deleted"); break;
+      case "cal-toggle": {
+        const was = snap().meds.find(x => x.id === el.dataset.med); if (!was) break;
+        const next = { ...was, addToCalendar: !was.addToCalendar };
+        const msg = await syncCalendar(was, next); await S.store.saveMed(S.pid, next); if (msg) toast(msg); break;
+      }
+      case "delete": readForm(); if (!S.editing.confirmDelete) { S.editing.confirmDelete = true; break; } if (!isCare()) await N.removeMedFromCalendar(S.editing.calendarEventIds || []); await S.store.deleteMed(S.pid, S.editing.id); S.editing = null; S.medDetail = null; toast("Medicine deleted"); break;
       case "perm": S.perm = await N.askReminderPermission(); if (!isCare()) await N.scheduleReminders(snap().meds, snap().doses); break;
       case "mkcode": S.link = await S.store.createLinkCode(S.pid); break;
       case "unlink": await S.store.removeCaregiver(S.pid, el.dataset.uid); toast("Removed"); break;
@@ -533,11 +590,12 @@ document.addEventListener("submit", async e => {
       for (const other of snap().meds) if (other.id !== m.id && m.slot && Number(other.slot) === m.slot) await S.store.saveMed(S.pid, { ...other, slot: null });
       if (!isNew) { const live = snap().meds.find(x => x.id === m.id); m.stock = live ? live.stock ?? null : m.stock ?? null; }
       Object.assign(m, { updatedByName: S.user?.name || "", updatedByRole: S.role, updatedAt: Date.now() });
+      const calMsg = await syncCalendar(isNew ? null : snap().meds.find(x => x.id === m.id), m);
       const startCount = isNew && typeof m.stock === "number" ? m.stock : null;
       if (startCount != null) m.stock = 0;
       await S.store.saveMed(S.pid, m);
       if (startCount != null) await adjustStock(S.pid, m.id, startCount, stockEv("start"));
-      S.editing = null; S.medDetail = m.id; toast(isNew ? "Medicine added" : "Saved");
+      S.editing = null; S.medDetail = m.id; toast((isNew ? "Medicine added" : "Saved") + (calMsg ? ". " + calMsg : ""));
     } else if (f.id === "timeform") {
       const sh = S.sheet, picked = new FormData(f).get("at"), p = snap(sh.pid);
       const list = sh.group ? M.dosesOn(new Date(), p.meds, p.doses, opts()).filter(d => d.time === sh.time && !d.log) : [findDose(sh.pid, sh.key)].filter(Boolean);

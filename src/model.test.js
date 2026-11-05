@@ -348,3 +348,163 @@ describe("low supply uses the time passed in", () => {
     expect(lowStock([m], {}, new Date(2026, 10, 4).getTime())).toEqual([]); // after its end date
   });
 });
+
+// ---- adherence progress ----
+import { ON_TIME_WINDOW_MIN, isOnTime, dayOnTime, onTimeRate, onTimeStreak, badgesFor, encouragement, adherenceProgress, BADGES } from "./model.js";
+import { medToIcs, rruleOf, calendarStarts } from "./model.js";
+
+describe("adherence progress", () => {
+  const daily = (o = {}) => ({ id: "d", name: "D", times: ["08:00"], schedule: { kind: "daily" }, start: "2026-01-01", ...o });
+  const dayOff = i => { const d = new Date(NOW); d.setDate(d.getDate() - i); return dayKey(d); };
+  // a taken log for the 08:00 dose `i` days before NOW, taken at hh:mm that day
+  const took = (i, hhmm, id = "d", time = "08:00") => { const day = dayOff(i), [h, m] = hhmm.split(":").map(Number), at = parseDay(day); at.setHours(h, m); return [doseKey(id, day, time), { medId: id, day, time, slot: time, status: "taken", at: at.toISOString() }]; };
+  const logs = (...entries) => Object.fromEntries(entries);
+
+  it("uses a 60 minute window, inclusive at both edges", () => {
+    expect(ON_TIME_WINDOW_MIN).toBe(60);
+    const when = new Date(2026, 10, 4, 8, 0).getTime(), d = at => ({ when, log: { status: "taken", at: new Date(at).toISOString() } });
+    expect(isOnTime(d(when + 60 * 60000))).toBe(true);
+    expect(isOnTime(d(when - 60 * 60000))).toBe(true);
+    expect(isOnTime(d(when + 61 * 60000))).toBe(false);
+    expect(isOnTime(d(when - 61 * 60000))).toBe(false);
+    expect(isOnTime({ when, log: { status: "skipped", at: new Date(when).toISOString() } })).toBe(false);
+    expect(isOnTime({ when })).toBe(false);
+  });
+
+  it("counts on-time, late and missed doses in a day", () => {
+    const yest = parseDay(dayOff(1));
+    expect(dayOnTime(yest, [daily()], logs(took(1, "09:00")), NOW)).toEqual({ total: 1, onTime: 1, open: 0, failed: 0 });
+    expect(dayOnTime(yest, [daily()], logs(took(1, "09:01")), NOW)).toMatchObject({ onTime: 0, failed: 1 });
+    expect(dayOnTime(yest, [daily()], {}, NOW)).toMatchObject({ onTime: 0, failed: 1 });
+  });
+
+  it("leaves as-needed medicines and extra doses out", () => {
+    const prn = { id: "p", name: "P", times: [], schedule: { kind: "prn" } };
+    const extra = { ["extra_p_1"]: { medId: "p", day: today, time: "10:00", status: "taken", at: new Date(NOW).toISOString(), extra: true } };
+    expect(dayOnTime(new Date(NOW), [prn], extra, NOW).total).toBe(0);
+    expect(onTimeRate([prn], extra, 7, NOW)).toEqual({ onTime: 0, total: 0, pct: null });
+    expect(onTimeStreak([prn], extra, NOW)).toBe(0);
+    // a prn medicine next to a daily one doesn't change the daily one's numbers
+    const d = logs(took(1, "08:00"));
+    expect(onTimeRate([daily(), prn], d, 7, NOW)).toEqual(onTimeRate([daily()], d, 7, NOW));
+  });
+
+  it("computes 7- and 30-day rates, not counting doses still open", () => {
+    const med = daily({ times: ["08:00", "20:00"] });
+    // 6 past days fully on time for 08:00, 20:00 never taken; today 08:00 on time, 20:00 still to come
+    const d = logs(...[0, 1, 2, 3, 4, 5, 6].map(i => took(i, "08:10")));
+    expect(onTimeRate([med], d, 7, NOW)).toEqual({ onTime: 7, total: 13, pct: 54 });
+    const r30 = onTimeRate([med], d, 30, NOW);
+    expect(r30).toEqual({ onTime: 7, total: 59, pct: 12 });
+  });
+
+  it("respects the start date in rates", () => {
+    const med = daily({ start: dayOff(2) });
+    expect(onTimeRate([med], logs(took(0, "08:00"), took(1, "08:00"), took(2, "08:00")), 30, NOW)).toEqual({ onTime: 3, total: 3, pct: 100 });
+  });
+
+  it("counts a streak of fully on-time days", () => {
+    const d = logs(took(0, "08:30"), took(1, "08:00"), took(2, "07:15"), took(3, "10:00"), took(4, "08:00"));
+    expect(onTimeStreak([daily()], d, NOW)).toBe(3); // day 3 was 2 h late
+  });
+
+  it("doesn't break the streak for today while it's still open, but counts it once complete", () => {
+    const med = daily({ times: ["08:00", "20:00"] });
+    const past = [1, 2].flatMap(i => [took(i, "08:00"), took(i, "20:00", "d", "20:00")]);
+    const withMorning = logs(...past, took(0, "08:00"));
+    expect(onTimeStreak([med], withMorning, NOW)).toBe(2); // 20:00 still to come
+    const late = new Date(2026, 10, 4, 20, 30).getTime();
+    expect(onTimeStreak([med], logs(...past, took(0, "08:00"), took(0, "20:05", "d", "20:00")), late)).toBe(3);
+  });
+
+  it("an already-missed dose today breaks the streak", () => {
+    const d = logs(took(1, "08:00"), took(2, "08:00"));
+    expect(onTimeStreak([daily()], d, NOW)).toBe(0); // 08:00 today not taken, now noon
+    expect(onTimeStreak([daily()], d, new Date(2026, 10, 4, 8, 30).getTime())).toBe(2); // still within the window
+  });
+
+  it("skips days with nothing scheduled", () => {
+    // Mon, Wed, Fri only; NOW is Wed 4 Nov → Mon 2, Fri 30 Oct, Wed 28 Oct
+    const med = daily({ schedule: { kind: "weekdays", days: [1, 3, 5] } });
+    const d = logs(took(0, "08:00"), took(2, "08:00"), took(5, "08:00"), took(7, "08:00"));
+    expect(onTimeStreak([med], d, NOW)).toBe(4);
+  });
+
+  it("awards badges at 3, 7, 14 and 30 days", () => {
+    expect(BADGES.map(b => b.days)).toEqual([3, 7, 14, 30]);
+    expect(badgesFor(2)).toEqual([]);
+    expect(badgesFor(3).map(b => b.days)).toEqual([3]);
+    expect(badgesFor(13).map(b => b.days)).toEqual([3, 7]);
+    expect(badgesFor(30).map(b => b.days)).toEqual([3, 7, 14, 30]);
+    expect(BADGES.every(b => b.emoji && b.label)).toBe(true);
+  });
+
+  it("writes an encouraging message", () => {
+    expect(encouragement(0, null)).toMatch(/3 more days/);
+    expect(encouragement(5, 100)).toMatch(/5 days in a row.*2 more days to/);
+    expect(encouragement(6, 100)).toMatch(/1 more day to/);
+    expect(encouragement(45, 100)).toMatch(/month/);
+  });
+
+  it("puts it together for the Today card", () => {
+    const d = logs(...Array.from({ length: 8 }, (_, i) => took(i, "08:00")));
+    const a = adherenceProgress([daily()], d, NOW);
+    expect(a.streak).toBe(8);
+    expect(a.rate7).toEqual({ onTime: 7, total: 7, pct: 100 });
+    expect(a.badges.map(b => b.days)).toEqual([3, 7]);
+    expect(a.message).toMatch(/8 days in a row/);
+  });
+});
+
+// ---- .ics export ----
+describe("medToIcs", () => {
+  const base = { id: "m1", name: "Metformin", strength: "500 mg", type: "pill", doseAmount: 2, times: ["08:00", "20:00"], start: "2026-10-01" };
+  const lines = ics => ics.replace(/\r\n /g, "").split("\r\n");
+
+  it("makes one repeating event per time of day, with CRLF line endings", () => {
+    const ics = medToIcs({ ...base, schedule: { kind: "daily" } }, {}, NOW);
+    expect(ics.startsWith("BEGIN:VCALENDAR\r\nVERSION:2.0\r\n")).toBe(true);
+    expect(ics.endsWith("END:VCALENDAR\r\n")).toBe(true);
+    expect(ics.split("\r\n").every(l => new TextEncoder().encode(l).length <= 75)).toBe(true);
+    const l = lines(ics);
+    expect(l.filter(x => x === "BEGIN:VEVENT")).toHaveLength(2);
+    expect(l).toContain("DTSTART:20261104T080000");
+    expect(l).toContain("DTEND:20261104T081500");
+    expect(l).toContain("DTSTART:20261104T200000");
+    expect(l.filter(x => x === "RRULE:FREQ=DAILY")).toHaveLength(2);
+    expect(l).toContain("UID:m1-0800@pillbox");
+    expect(l.find(x => x.startsWith("SUMMARY:"))).toBe("SUMMARY:💊 Metformin 500 mg (2 pills)");
+  });
+
+  it("writes RRULEs for each schedule", () => {
+    expect(rruleOf({ ...base, schedule: { kind: "weekdays", days: [5, 1, 3] } })).toBe("FREQ=WEEKLY;BYDAY=MO,WE,FR");
+    expect(rruleOf({ ...base, schedule: { kind: "everyNDays", n: 3 } })).toBe("FREQ=DAILY;INTERVAL=3");
+    expect(rruleOf({ ...base, schedule: { kind: "everyNWeeks", n: 2 } })).toBe("FREQ=WEEKLY;INTERVAL=2");
+    expect(rruleOf({ ...base, schedule: { kind: "monthly", dayOfMonth: 15 } })).toBe("FREQ=MONTHLY;BYMONTHDAY=15");
+    expect(rruleOf({ ...base, schedule: { kind: "monthly", dayOfMonth: 31 } })).toBe("FREQ=MONTHLY;BYMONTHDAY=28,29,30,31;BYSETPOS=-1");
+    expect(rruleOf({ ...base, end: "2026-12-31", schedule: { kind: "daily" } })).toBe("FREQ=DAILY;UNTIL=20261231T235959");
+    expect(rruleOf({ ...base, times: [], schedule: { kind: "prn" } })).toBe(null);
+  });
+
+  it("starts on the next scheduled day", () => {
+    // every 3 days from 2 Oct: ... 1 Nov, 4 Nov → today; from 1 Oct: ... 31 Oct, 3 Nov, 6 Nov
+    expect(calendarStarts({ ...base, start: "2026-10-02", schedule: { kind: "everyNDays", n: 3, fixed: true } }, {}, NOW)[0].start).toEqual(new Date(2026, 10, 4, 8, 0));
+    expect(calendarStarts({ ...base, schedule: { kind: "everyNDays", n: 3, fixed: true } }, {}, NOW)[0].start).toEqual(new Date(2026, 10, 6, 8, 0));
+    expect(lines(medToIcs({ ...base, times: ["09:00"], schedule: { kind: "monthly", dayOfMonth: 20 } }, {}, NOW))).toContain("DTSTART:20261120T090000");
+  });
+
+  it("follows the last dose taken for interval schedules", () => {
+    const m = { ...base, times: ["09:00"], schedule: { kind: "everyNWeeks", n: 1 } };
+    // taken Tue 3 Nov at 10:30 → next Tue 10 Nov 10:30
+    const doses = { [doseKey("m1", "2026-11-03", "09:00")]: { medId: "m1", day: "2026-11-03", time: "09:00", slot: "09:00", status: "taken", at: new Date(2026, 10, 3, 10, 30).toISOString() } };
+    expect(lines(medToIcs(m, doses, NOW))).toContain("DTSTART:20261110T103000");
+  });
+
+  it("escapes text and is empty for as-needed or ended medicines", () => {
+    const ics = medToIcs({ ...base, name: "A, B; C", notes: "With food\nno alcohol", schedule: { kind: "daily" } }, {}, NOW);
+    expect(lines(ics).find(x => x.startsWith("SUMMARY:"))).toContain("A\\, B\; C");
+    expect(lines(ics).find(x => x.startsWith("DESCRIPTION:"))).toContain("With food\\nno alcohol");
+    expect(medToIcs({ ...base, times: [], schedule: { kind: "prn" } }, {}, NOW)).toBe("");
+    expect(medToIcs({ ...base, end: "2026-11-01", schedule: { kind: "daily" } }, {}, NOW)).toBe("");
+  });
+});

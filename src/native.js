@@ -1,6 +1,6 @@
 // Android-only features, each with a browser fallback so the app also runs in Chrome for testing.
 import { Capacitor } from "@capacitor/core";
-import { fmtTime, dosesOn, reminderPlan, doseLabel } from "./model.js";
+import { fmtTime, dosesOn, reminderPlan, doseLabel, scheduleLabel, recurrenceOf, calendarStarts, calendarTitle, medToIcs } from "./model.js";
 
 export const isNative = Capacitor.isNativePlatform();
 
@@ -144,6 +144,76 @@ export async function snooze(title, body, extra) {
     await loadLN();
     await ln().schedule({ notifications: [{ id: 4000 + Math.floor(Math.random() * 900), title, body, schedule: { at: new Date(Date.now() + 10 * 60000), allowWhileIdle: true }, actionTypeId: "DOSE", extra, channelId: "doses" }] });
   } catch (e) {}
+}
+
+// ---------------- "Add to my calendar" ----------------
+// Android: repeating events in the phone's calendar (@ebarooni/capacitor-calendar). Anywhere that fails, or in the
+// browser: an .ics file to share (Android share sheet) or download. Never throws; returns
+// { ok, method: "device" | "ics", ids, message } where ids are the device event ids (to remove them later).
+// Same proxy caution as LocalNotifications above: keep the plugin in a binding, never return or await it.
+let CAL = null;
+async function loadCal() { if (!CAL) CAL = (await import("@ebarooni/capacitor-calendar")).CapacitorCalendar; }
+
+const DAY_TO_PLUGIN = [7, 1, 2, 3, 4, 5, 6]; // JS Sunday=0 → plugin Monday=1 … Sunday=7
+export async function addMedToCalendar(med, doses = {}) {
+  const starts = calendarStarts(med, doses), r = recurrenceOf(med, doses);
+  if (!starts.length || !r) return { ok: false, method: "none", ids: [], message: "Nothing to add: this medicine has no upcoming scheduled doses." };
+  if (isNative) {
+    let denied = false;
+    try {
+      await loadCal();
+      const perm = await CAL.requestFullCalendarAccess();
+      if (perm.result !== "granted") denied = true;
+      else {
+        // The plugin has no "last day of shorter months" rule, so days 29–31 go through the .ics file instead.
+        if (r.byMonthDay > 28) throw new Error("monthly day " + r.byMonthDay);
+        const recurrence = { frequency: r.freq.toLowerCase(), interval: r.interval };
+        if (r.byDay) recurrence.byWeekDay = r.byDay.map(d => DAY_TO_PLUGIN[d]);
+        if (r.byMonthDay) recurrence.byMonthDay = [r.byMonthDay];
+        if (med.end) { const [y, m, d] = med.end.split("-").map(Number); recurrence.end = new Date(y, m - 1, d, 23, 59, 59).getTime(); }
+        const ids = [];
+        for (const { start } of starts) {
+          const res = await CAL.createEvent({
+            title: calendarTitle(med),
+            description: "Take " + doseLabel(med) + " (" + scheduleLabel(med) + ")." + (med.notes ? " " + med.notes : ""),
+            startDate: start.getTime(), endDate: start.getTime() + 15 * 60000,
+            recurrence, color: med.color || undefined,
+          });
+          if (res && res.id) ids.push(String(res.id));
+        }
+        return { ok: true, method: "device", ids, message: "Added to your calendar" };
+      }
+    } catch (e) {}
+    const shared = await shareIcs(med, doses);
+    if (denied) return { ...shared, message: shared.ok ? "No calendar permission, so we made a calendar file to share instead." : "Calendar access wasn't allowed. You can turn it on in Android settings." };
+    return shared;
+  }
+  return shareIcs(med, doses);
+}
+export async function removeMedFromCalendar(ids = []) {
+  if (!isNative || !ids.length) return;
+  try { await loadCal(); await CAL.deleteEventsById({ ids }); } catch (e) {}
+}
+/** Share (Android) or download (browser) the medicine's .ics file. */
+export async function shareIcs(med, doses = {}) {
+  const ics = medToIcs(med, doses), name = (String(med.name || "medicine").replace(/[^\w-]+/g, "-").replace(/^-+|-+$/g, "") || "medicine") + ".ics";
+  if (!ics) return { ok: false, method: "none", ids: [], message: "Nothing to add: this medicine has no upcoming scheduled doses." };
+  try {
+    if (isNative) {
+      const { Filesystem, Directory, Encoding } = await import("@capacitor/filesystem");
+      const { Share } = await import("@capacitor/share");
+      const f = await Filesystem.writeFile({ path: name, data: ics, directory: Directory.Cache, encoding: Encoding.UTF8 });
+      await Share.share({ title: med.name + " schedule", files: [f.uri], dialogTitle: "Add to calendar" });
+    } else {
+      const url = URL.createObjectURL(new Blob([ics], { type: "text/calendar" }));
+      const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }
+    return { ok: true, method: "ics", ids: [], message: isNative ? "Calendar file ready to share" : "Calendar file downloaded. Open it to add the doses." };
+  } catch (e) {
+    const cancelled = /cancel/i.test(String(e && e.message || e));
+    return { ok: false, method: "ics", ids: [], message: cancelled ? "Not added to a calendar." : "Couldn't make the calendar file." };
+  }
 }
 
 // ---------------- Pillbox over Bluetooth ----------------
