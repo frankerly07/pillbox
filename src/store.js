@@ -160,7 +160,7 @@ export class CloudStore {
     const b = writeBatch(this.db);
     b.update(doc(this.db, "patients", pid, "meds", medId), { stock: increment(delta) });
     b.set(doc(collection(this.db, "patients", pid, "stock")), { medId, delta, at: new Date().toISOString(), ...ev });
-    await b.commit().catch(() => {});
+    await b.commit(); // let failures reach the caller, which undoes the matching dose change and tells the user
   }
 
   // Patient makes a 6-digit code (valid 24 h). Caregiver types it in to link.

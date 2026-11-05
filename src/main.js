@@ -23,23 +23,38 @@ const isCare = () => S.role === "caregiver";
 
 // ---------------- actions ----------------
 const stockEv = (reason, note = "") => ({ reason, note, by: S.role, byName: S.user?.name || "" });
+// Change the pill count. If that can't be saved, put back the dose change that went with it (revert) so the
+// count and the dose log don't drift apart, and throw an error the caller shows as a toast.
+async function adjustStock(pid, medId, delta, ev, revert) {
+  try { await S.store.adjustStock(pid, medId, delta, ev); }
+  catch (err) {
+    let undone = false;
+    if (revert) undone = await revert().then(() => true, () => false);
+    throw new Error("Couldn't update the pill count" + (undone ? ", so the change was undone" : revert ? " and couldn't undo the dose change" : "") + ". " + (err.message || String(err)));
+  }
+}
+const putBack = (pid, key, was) => () => was ? S.store.setDose(pid, key, was) : S.store.clearDose(pid, key);
 async function takeDose(pid, d, source = "app") {
   const p = snap(pid);
   const existing = p.doses[d.key];
   if (existing && existing.status === "taken") { showAlert("dup", "Already taken at " + fmtClock(existing.at) + "."); return false; }
-  await S.store.setDose(pid, d.key, { medId: d.med.id, day: d.day, time: d.time, status: "taken", at: new Date().toISOString(), source, by: S.role, byName: S.user?.name || "" });
-  if (!existing) await S.store.adjustStock(pid, d.med.id, -M.pillsPerDose(d.med), stockEv("taken"));
+  const pills = M.pillsPerDose(d.med);
+  await S.store.setDose(pid, d.key, { medId: d.med.id, day: d.day, time: d.time, status: "taken", at: new Date().toISOString(), source, by: S.role, byName: S.user?.name || "", pills });
+  // Anything logged here before was a skip, which used no pills, so taking always comes out of the bottle.
+  await adjustStock(pid, d.med.id, -pills, stockEv("taken"), putBack(pid, d.key, existing));
   return true;
 }
 async function skipDose(pid, d) {
   const was = snap(pid).doses[d.key];
   await S.store.setDose(pid, d.key, { medId: d.med.id, day: d.day, time: d.time, status: "skipped", at: new Date().toISOString(), source: "app", by: S.role, byName: S.user?.name || "" });
-  if (was && was.status === "taken") await S.store.adjustStock(pid, d.med.id, M.pillsPerDose(d.med), stockEv("undo"));
+  const back = M.pillsTaken(was, d.med);
+  if (back) await adjustStock(pid, d.med.id, back, stockEv("undo"), putBack(pid, d.key, was));
 }
 async function undoDose(pid, key) {
   const was = snap(pid).doses[key]; if (!was) return;
   await S.store.clearDose(pid, key);
-  if (was.status === "taken") { const med = snap(pid).meds.find(m => m.id === was.medId); if (med) await S.store.adjustStock(pid, med.id, M.pillsPerDose(med), stockEv("undo")); }
+  const med = snap(pid).meds.find(m => m.id === was.medId), back = M.pillsTaken(was, med);
+  if (med && back) await adjustStock(pid, med.id, back, stockEv("undo"), putBack(pid, key, was));
 }
 async function takeExtra(pid, med, force = false) {
   const last = M.lastTaken(med.id, snap(pid).doses);
@@ -47,8 +62,9 @@ async function takeExtra(pid, med, force = false) {
     S.alert = { kind: "dup", text: "You took " + med.name + " at " + fmtClock(last.at) + ", less than 2 hours ago.", force: med.id }; render(); return;
   }
   const now = new Date();
-  await S.store.setDose(pid, "extra_" + med.id + "_" + now.getTime(), { medId: med.id, day: dayKey(now), time: M.hm(now), status: "taken", at: now.toISOString(), source: "app", by: S.role, byName: S.user?.name || "", extra: true });
-  await S.store.adjustStock(pid, med.id, -M.pillsPerDose(med), stockEv("taken", "extra dose"));
+  const key = "extra_" + med.id + "_" + now.getTime(), pills = M.pillsPerDose(med);
+  await S.store.setDose(pid, key, { medId: med.id, day: dayKey(now), time: M.hm(now), status: "taken", at: now.toISOString(), source: "app", by: S.role, byName: S.user?.name || "", extra: true, pills });
+  await adjustStock(pid, med.id, -pills, stockEv("taken", "extra dose"), putBack(pid, key, null));
   toast(med.name + " logged");
 }
 async function lidOpened(slot, source) {
@@ -383,10 +399,10 @@ document.addEventListener("click", async e => {
       case "addtime": readForm(); S.editing.times.push(S.editing.times.length ? "20:00" : "08:00"); break;
       case "rmtime": readForm(); S.editing.times.splice(Number(el.dataset.i), 1); break;
       case "delete": readForm(); if (!S.editing.confirmDelete) { S.editing.confirmDelete = true; break; } await S.store.deleteMed(S.pid, S.editing.id); S.editing = null; S.medDetail = null; toast("Medicine deleted"); break;
-      case "perm": S.perm = await N.askReminderPermission(); if (!isCare()) await N.scheduleReminders(snap().meds); break;
+      case "perm": S.perm = await N.askReminderPermission(); if (!isCare()) await N.scheduleReminders(snap().meds, snap().doses); break;
       case "mkcode": S.link = await S.store.createLinkCode(S.pid); break;
       case "unlink": await S.store.removeCaregiver(S.pid, el.dataset.uid); toast("Removed"); break;
-      case "ble": N.connectPillbox(slot => lidOpened(slot, "pillbox"), s => { S.ble = s; render(); }); return;
+      case "ble": N.connectPillbox(slot => lidOpened(slot, "pillbox").catch(err => toast(err.message || String(err))), s => { S.ble = s; render(); }); return;
       case "sim": await lidOpened(Number(el.dataset.slot), "simulated"); break;
       case "open": S.pid = el.dataset.pid; S.sub = "today"; window.scrollTo(0, 0); break;
       case "back": S.pid = null; break;
@@ -414,13 +430,13 @@ document.addEventListener("submit", async e => {
       const startCount = isNew && typeof m.stock === "number" ? m.stock : null;
       if (startCount != null) m.stock = 0;
       await S.store.saveMed(S.pid, m);
-      if (startCount != null) await S.store.adjustStock(S.pid, m.id, startCount, stockEv("start"));
+      if (startCount != null) await adjustStock(S.pid, m.id, startCount, stockEv("start"));
       S.editing = null; S.medDetail = m.id; toast(isNew ? "Medicine added" : "Saved");
     } else if (f.id === "stockform") {
       const fd = new FormData(f), n = Number(fd.get("n")), note = (fd.get("note") || "").trim();
       const m = snap().meds.find(x => x.id === S.medDetail); if (!m || !(n >= 0)) return;
-      if (S.stockForm.mode === "refill") { await S.store.adjustStock(S.pid, m.id, n, stockEv("refill", note)); toast(n + " pills added"); }
-      else { if (typeof m.stock !== "number") await S.store.saveMed(S.pid, { ...m, stock: 0 }); await S.store.adjustStock(S.pid, m.id, n - (m.stock || 0), stockEv("adjust", note)); toast("Count saved"); }
+      if (S.stockForm.mode === "refill") { await adjustStock(S.pid, m.id, n, stockEv("refill", note)); toast(n + " pills added"); }
+      else { if (typeof m.stock !== "number") await S.store.saveMed(S.pid, { ...m, stock: 0 }); await adjustStock(S.pid, m.id, n - (m.stock || 0), stockEv("adjust", note)); toast("Count saved"); }
       S.stockForm = null;
     } else if (f.id === "joinform") {
       const code = new FormData(f).get("code").replace(/\D/g, "");
@@ -453,7 +469,7 @@ let listUnsub = null;
 const alertedMissed = new Set(JSON.parse(localStorage.getItem("pillbox.alerted") || "[]"));
 function onSnap(pid, data) {
   S.snaps[pid] = data;
-  if (!isCare()) N.scheduleReminders(data.meds).catch(() => {});
+  if (!isCare()) { N.scheduleReminders(data.meds, data.doses).catch(() => {}); runQueuedReminderActions(); }
   else {
     N.scheduleCaregiverChecks(Object.values(S.snaps), S.settings.dueWindowMin).catch(() => {});
     checkMissed();
@@ -471,13 +487,34 @@ function checkMissed() {
   }
   try { localStorage.setItem("pillbox.alerted", JSON.stringify([...alertedMissed].slice(-300))); } catch (e) {}
 }
+// A reminder's "Taken" button can be pressed before the patient's data has loaded (it cold-starts the app),
+// so hold it until the data is there, then record it.
+const queuedActions = [];
+async function onReminderAction(a) {
+  const { action, extra, title, body } = a;
+  if (action === "snooze") { await N.snooze(title, body, extra).catch(() => {}); return; }
+  if (action !== "take") return;
+  const pid = S.pid;
+  if (!pid || !S.snaps[pid]) { queuedActions.push(a); return; }
+  const p = snap(pid), list = M.dosesForReminder(extra, p.meds, p.doses);
+  try {
+    for (const d of list) await takeDose(pid, d, "reminder");
+    if (list.length) toast("Marked taken from the reminder");
+  } catch (err) { toast(err.message || String(err)); }
+  if (!S.editing) render();
+}
+let actionRun = Promise.resolve();
+function runQueuedReminderActions() {
+  if (!S.pid || !S.snaps[S.pid]) return;
+  for (const a of queuedActions.splice(0)) actionRun = actionRun.then(() => onReminderAction(a));
+}
 async function afterLogin() {
   listUnsub && listUnsub();
   listUnsub = S.store.listPatients(list => {
     S.patients = list;
     for (const p of list) if (!watchers.has(p.id)) watchers.set(p.id, S.store.watchPatient(p.id, d => onSnap(p.id, d)));
     for (const [id, un] of watchers) if (!list.find(p => p.id === id)) { un(); watchers.delete(id); delete S.snaps[id]; }
-    if (!isCare()) S.pid = list[0]?.id || null;
+    if (!isCare()) { S.pid = list[0]?.id || null; runQueuedReminderActions(); }
     render();
   });
   S.perm = await N.reminderPermission().catch(() => "unsupported");
@@ -491,15 +528,7 @@ async function boot() {
   window.addEventListener("hashchange", route);
   $app.innerHTML = `<p class="muted" style="padding-top:40px">Loading…</p>`;
   try { S.user = await S.store.init(); } catch (e) { $app.innerHTML = `<div class="banner dup">Couldn't start: ${esc(e.message)}</div>`; return; }
-  await N.setupNotifications(async ({ action, extra, title, body }) => {
-    if (!S.pid) return;
-    if (action === "take" && extra.medIds) {
-      const p = snap(); const list = M.dosesOn(new Date(), p.meds, p.doses, opts()).filter(d => d.time === extra.time && extra.medIds.includes(d.med.id) && !d.log);
-      for (const d of list) await takeDose(S.pid, d, "reminder");
-      toast("Marked taken from the reminder");
-    } else if (action === "snooze") await N.snooze(title, body, extra);
-    render();
-  }).catch(() => {});
+  await N.setupNotifications(onReminderAction).catch(() => {});
   if (S.user) await afterLogin();
   route();
   setInterval(() => { checkMissed(); if (!S.editing && !document.querySelector("input:focus")) render(); }, 30000);

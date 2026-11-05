@@ -105,6 +105,37 @@ export function supply(med, now = Date.now()) {
   return { left, daily, daysLeft, runOut, low, out, warnDays };
 }
 export const lowStock = meds => meds.filter(m => supply(m).low);
+// Pills a dose record took out of the bottle: what it saved when taken (older records: the medicine's current amount), 0 if not taken.
+export function pillsTaken(log, med) {
+  if (!log || log.status !== "taken") return 0;
+  return Number(log.pills) > 0 ? Number(log.pills) : pillsPerDose(med || {});
+}
+
+// ---- reminders ----
+export const REMINDER_DAYS = 14;
+/**
+ * One-off alarms for the next `days` days, one per day and time, listing the active medicines whose dose isn't logged yet.
+ * id = 1000 + day offset * 200 + index of the time of day, so ids stay in 1000–3999.
+ */
+export function reminderPlan(meds, doses, { now = Date.now(), days = REMINDER_DAYS } = {}) {
+  const times = [...new Set(meds.flatMap(m => m.times || []))].sort(), out = [];
+  for (let i = 0; i < days; i++) {
+    const date = new Date(now); date.setDate(date.getDate() + i);
+    const slots = {};
+    for (const d of dosesOn(date, meds, doses, { now })) {
+      if (d.log || d.when <= now) continue;
+      (slots[d.time] = slots[d.time] || { id: 1000 + i * 200 + times.indexOf(d.time), day: d.day, time: d.time, at: new Date(d.when), meds: [] }).meds.push(d.med);
+    }
+    out.push(...Object.values(slots));
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+// Doses a reminder's "Taken" button stands for: that day's (older alarms: today's) doses at that time, not yet taken.
+export function dosesForReminder(extra, meds, doses, now = Date.now()) {
+  if (!extra || !extra.time || !extra.medIds) return [];
+  const date = extra.day ? parseDay(extra.day) : new Date(now);
+  return dosesOn(date, meds, doses, { now }).filter(d => d.time === extra.time && extra.medIds.includes(d.med.id) && !(d.log && d.log.status === "taken"));
+}
 
 // Last 'taken' entry for a medicine (scheduled or extra)
 export function lastTaken(medId, doses) {
