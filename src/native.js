@@ -1,6 +1,6 @@
 // Android-only features, each with a browser fallback so the app also runs in Chrome for testing.
 import { Capacitor } from "@capacitor/core";
-import { fmtTime, dosesOn, reminderPlan } from "./model.js";
+import { fmtTime, dosesOn, reminderPlan, doseLabel } from "./model.js";
 
 export const isNative = Capacitor.isNativePlatform();
 
@@ -58,8 +58,9 @@ export async function askReminderPermission() {
 }
 
 /**
- * Patient app: one-off alarms for the next two weeks (see reminderPlan), skipping days outside a medicine's
- * start/end dates and doses already logged. Re-run on every data change; runs are queued so they don't interleave.
+ * Patient app: one-off alarms for the next two weeks (see reminderPlan), only on days a medicine's schedule
+ * is due (start/end dates, weekdays, every N days/weeks, monthly; never for as-needed) and not for doses
+ * already logged. Re-run on every data change; runs are queued so they don't interleave.
  */
 let reminderRun = Promise.resolve();
 export function scheduleReminders(meds, doses = {}) {
@@ -76,7 +77,7 @@ async function replaceReminders(meds, doses) {
     const notifications = reminderPlan(meds, doses).map(r => ({
       id: r.id,
       title: "Time for your " + fmtTime(r.time) + " medicine",
-      body: r.meds.map(m => m.name + " " + (m.strength || "") + " (" + (m.perDose || "1 dose") + ")").join(", "),
+      body: r.meds.map(m => m.name + (m.strength ? " " + m.strength : "") + " (" + doseLabel(m) + ")").join(", "),
       schedule: { at: r.at, allowWhileIdle: true },
       actionTypeId: "DOSE",
       extra: { day: r.day, time: r.time, medIds: r.meds.map(m => m.id) },

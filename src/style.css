@@ -147,3 +147,21 @@ nav.tabs a[aria-current="page"]{color:var(--accent);background:var(--accent-soft
 .supply-grid .big{font-family:var(--f-mono);font-size:1.8rem;font-weight:500;line-height:1.1}
 .delta{text-align:right;font-weight:500;flex:none}
 .delta.plus{color:var(--ok)}
+/* medicine form: type chips, weekday chips, amount + unit rows */
+fieldset{border:0;margin:0;padding:0;min-width:0}
+legend{font-weight:700;font-size:.92rem;padding:0;margin-bottom:4px}
+h3{font-size:1rem;font-weight:700;margin-top:4px}
+.opts{display:flex;flex-wrap:wrap;gap:6px}
+.opt{position:relative;font-weight:700;font-size:.9rem}
+.opt input{position:absolute;opacity:0;width:1px;height:1px;min-height:0}
+.opt > span{display:inline-flex;align-items:center;gap:4px;min-height:40px;padding:6px 12px;border:1.5px solid var(--line);border-radius:999px;background:var(--surface);cursor:pointer}
+.opt input:checked + span{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.opt input:focus-visible + span{outline:3px solid var(--accent);outline-offset:2px}
+.amount{display:flex;gap:8px;align-items:center}
+.amount input{flex:1 1 5em;min-width:0;width:auto}
+.amount select{flex:1 1 6em;width:auto}
+.amount span{white-space:nowrap;color:var(--muted);font-weight:700}
+.field .amount + .muted,.field select + .opts,.field select + .amount{margin-top:6px}
+/* logged vs scheduled time */
+.well .sched{font-family:var(--f-body);font-size:.75rem;color:var(--muted);font-weight:700}
+.dose-times{margin:0}
