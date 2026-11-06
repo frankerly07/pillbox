@@ -525,7 +525,7 @@ export const calendarTitle = med => typeIcon(med) + " " + [med.name, med.strengt
 export function medToIcs(med, doses = {}, now = Date.now()) {
   const starts = calendarStarts(med, doses, now), rule = rruleOf(med, doses);
   if (!starts.length || !rule) return "";
-  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Pillbox//Medicine schedule//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"];
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//PillAlly//Medicine schedule//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"];
   for (const { time, start } of starts) {
     const end = new Date(start.getTime() + 15 * 60000);
     lines.push("BEGIN:VEVENT", "UID:" + med.id + "-" + time.replace(":", "") + "@pillbox", "DTSTAMP:" + icsUtc(new Date(now)),

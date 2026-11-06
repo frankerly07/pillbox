@@ -26,6 +26,7 @@ const snap = (pid = S.pid) => S.snaps[pid] || { meds: [], doses: {}, events: {},
 // Background redraws (new data, 30 s tick) wait while a form is open, so typing and focus aren't lost.
 const busy = () => !!(S.editing || S.sheet);
 const isCare = () => S.activeView === "caregiver";
+const productName = () => (S.legacyCare ? "PillAlly Care" : "PillAlly");
 const PKEY = "pillbox.profile";
 function readProfile() { try { return JSON.parse(localStorage.getItem(PKEY) || "null"); } catch (e) { return null; } }
 function writeProfile(p) { try { localStorage.setItem(PKEY, JSON.stringify(p)); } catch (e) {} }
@@ -174,7 +175,7 @@ function exampleBanner() {
 }
 function legacyBanner() {
   if (!S.legacyCare) return "";
-  return `<div class="banner info"><div><strong>This is the separate Pillbox Care app.</strong> Its records stay here. Android cannot move them into Pillbox (com.pillbox.patient). Nothing is deleted. Export a backup and import it in Pillbox. That file is not a live link.</div></div>`;
+  return `<div class="banner info"><div><strong>This is the separate PillAlly Care app.</strong> Its records stay here. Android cannot move them into PillAlly (com.pillbox.patient). Nothing is deleted. Export a backup and import it in PillAlly. That file is not a live link.</div></div>`;
 }
 function viewSwitch() {
   const p = S.profile;
@@ -397,7 +398,7 @@ function drugMessage(code) {
     limited: "The drug list is busy. Wait a moment, or type the name yourself.",
     short: "Type at least two letters.",
     unavailable: "The drug list didn't answer. Type the name yourself.",
-    invite: "That is a Pillbox connection code, not a medicine package. Connection codes are used under Care team.",
+    invite: "That is a PillAlly connection code, not a medicine package. Connection codes are used under Care team.",
     unmapped: "This barcode is not an NDC package code. A store UPC is not a drug code. Type the medicine name, or the NDC printed on the package.",
     invalid: "Those digits aren't a package code this app can read. Type the name or the NDC.",
     denied: "Camera access is off. Type the numbers under the barcode, or search by name.",
@@ -547,7 +548,7 @@ function careTeamBlock(pid, p) {
 function settingsExtras() {
   const p = S.profile || {};
   const rec = p.recommended === "yes" ? "Yes" : p.recommended === "no" ? "No" : p.recommended === "skip" ? "Skipped" : "Not answered";
-  return `<div class="stack-tight"><strong>How you use Pillbox</strong>
+  return `<div class="stack-tight"><strong>How you use ${esc(productName())}</strong>
     <div class="muted small">This only changes the screens on this phone. It does not grant access to anyone's medicines.</div>
     <div class="row"><button class="btn-sm ${p.usePatient ? "btn-primary" : ""}" data-act="role-toggle" data-mode="patient" aria-pressed="${!!p.usePatient}">I take medicines</button>
     <button class="btn-sm ${p.useCaregiver ? "btn-primary" : ""}" data-act="role-toggle" data-mode="caregiver" aria-pressed="${!!p.useCaregiver}">I help someone</button></div>
@@ -587,7 +588,7 @@ function joinBlock() {
   const status = syncStatus(S.store);
   if (S.store.mode !== "cloud") {
     return `<section class="sheet stack"><div class="banner info"><div><strong>${esc(status.title)}</strong> ${esc(status.detail)}</div></div>
-      <p>Ask them to open Pillbox, go to <strong>More › Care team</strong>, and create a code after sync is set up. Typing a code here would not connect you, so there is no box for one.</p></section>`;
+      <p>Ask them to open PillAlly, go to <strong>More › Care team</strong>, and create a code after sync is set up. Typing a code here would not connect you, so there is no box for one.</p></section>`;
   }
   const preview = S.invitePreview;
   return `<form class="sheet stack" id="joinform"><div class="banner info"><div><strong>${esc(status.title)}</strong> ${esc(status.detail)}</div></div>
@@ -601,7 +602,7 @@ function joinBlock() {
 // ---------------- auth screen ----------------
 function authView() {
   const a = S.auth, signup = a.mode === "signup";
-  return `<div class="stack auth">${header("Pillbox", isCare() ? "Signed-in account" : "Your medicines")}
+  return `<div class="stack auth">${header(productName(), isCare() ? "Signed-in account" : "Your medicines")}
     <form class="sheet stack" id="authform"><h2>${signup ? "Create account" : "Sign in"}</h2>
       ${signup ? `<div class="field"><label for="a-name">Your name</label><input id="a-name" name="name" required autocomplete="name"></div>` : ""}
       <div class="field"><label for="a-email">Email</label><input id="a-email" name="email" type="email" required autocomplete="email"></div>
@@ -624,13 +625,13 @@ function onboardView() {
   const kept = S.store.mode === "local" && S.store.data && !S.store.data.fresh;
   const keptLine = kept ? `<div class="banner info"><div><strong>Medicines already on this phone stay here.</strong> Choosing a view does not delete them or grant access to anyone.</div></div>` : "";
   if (step === "recommend") {
-    return `<div class="stack auth">${header("Pillbox", "One optional question")}${legacyBanner()}
+    return `<div class="stack auth">${header(productName(), "One optional question")}${legacyBanner()}
       <section class="sheet stack"><h2>Did a healthcare professional recommend this app?</h2>
-      <p class="muted">You can skip this. The answer does not change what you can open, and Pillbox does not treat it as a medical recommendation.</p>
+      <p class="muted">You can skip this. The answer does not change what you can open, and ${esc(productName())} does not treat it as a medical recommendation.</p>
       <div class="row"><button class="btn-primary" data-act="recommend" data-v="yes">Yes</button><button data-act="recommend" data-v="no">No</button><button data-act="recommend" data-v="skip">Skip</button></div></section></div>`;
   }
   const choices = [["patient", "I take medicines"], ["caregiver", "I help someone else"], ["both", "Both"]];
-  return `<div class="stack auth">${header("Pillbox", "How will you use it?")}${legacyBanner()}${keptLine}
+  return `<div class="stack auth">${header(productName(), "How will you use it?")}${legacyBanner()}${keptLine}
     <section class="sheet stack"><h2>Choose what you see</h2>
     <p class="muted">This is only the screens on this phone. It does not connect you to another person and does not let a view open someone else's medicines.</p>
     <div class="stack">${choices.map(([k, label]) => `<button class="role-choice" data-act="role-pick" data-mode="${k}">${label}</button>`).join("")}</div>
@@ -1131,7 +1132,7 @@ async function afterLogin() {
 
 async function boot() {
   try { S.legacyCare = (await N.detectApp()).legacyCarePackage; } catch (e) { S.legacyCare = false; }
-  document.title = "Pillbox";
+  document.title = productName();
   S.store = makeStore({ legacyCarePackage: S.legacyCare });
   S.profile = readProfile() || S.store.profile || null;
   if (S.profile?.onboarded) writeProfile(S.profile);
