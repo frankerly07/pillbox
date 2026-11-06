@@ -10,7 +10,7 @@ import { firebaseConfig } from "./firebase-config.js";
 
 const listeners = () => new Set();
 const LKEY = "pillbox.v2";
-const NOT_DEPLOYED = "This needs a Pillbox Cloud Function, which is not deployed. Deploying it requires the Firebase Blaze plan (billing). This app does not enable billing, so the action was not done.";
+const NOT_DEPLOYED = "This needs a PillAlly Cloud Function, which is not deployed. Deploying it requires the Firebase Blaze plan (billing). This app does not enable billing, so the action was not done.";
 
 function sampleMeds(start = dayKey(new Date())) {
   return [
@@ -35,7 +35,7 @@ export function syncStatus(store) {
   return {
     mode: "phone",
     title: "On this phone only",
-    detail: "Sync is not set up. Records stay on this phone. A code created here would not connect another phone, so Pillbox does not create one. This is not shared access.",
+    detail: "Sync is not set up. Records stay on this phone. A code created here would not connect another phone, so PillAlly does not create one. This is not shared access.",
   };
 }
 

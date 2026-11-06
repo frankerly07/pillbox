@@ -121,7 +121,7 @@ function newId(id, taken, n) {
  */
 export function planImport(existingPatients, backup, { intoEmptyId = null, idStart = 1 } = {}) {
   if (!backup || backup.pillboxBackup !== 1 || !backup.patients || typeof backup.patients !== "object") {
-    return { ok: false, message: "That file isn't a Pillbox backup." };
+    return { ok: false, message: "That file isn't a PillAlly backup." };
   }
   const patients = {};
   for (const [id, p] of Object.entries(existingPatients || {})) patients[id] = structuredClone(p);

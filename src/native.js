@@ -5,7 +5,7 @@ import { fmtTime, dosesOn, reminderPlan, doseLabel, scheduleLabel, recurrenceOf,
 export const isNative = Capacitor.isNativePlatform();
 
 // Which installed package is this? com.pillbox.care is the older separate app.
-// It does not choose access. The unified app (com.pillbox.patient) asks how the person will use Pillbox.
+// It does not choose access. The unified app (com.pillbox.patient) asks how the person will use PillAlly.
 // `?role=care` still opens the legacy-package preview in a browser.
 export async function detectApp() {
   const q = new URLSearchParams(location.search).get("role");

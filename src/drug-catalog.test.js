@@ -32,7 +32,7 @@ describe("GS1 check digit and NDC-in-GTIN", () => {
     expect(parsed.ids).toEqual([]);
   });
 
-  it("drops lot and serial and refuses a Pillbox connection code", () => {
+  it("drops lot and serial and refuses a PillAlly connection code", () => {
     const parsed = parsePackageCode("(01)00300010123455(17)281231(10)LOT9(21)SERIAL99");
     expect(parsed.ndc10).toBe("0001012345");
     expect(JSON.stringify(parsed)).not.toContain("SERIAL99");
