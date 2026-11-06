@@ -6,6 +6,7 @@ import { CATALOG_NOTICE, applyCatalogChoice } from "./drug-catalog.js";
 import { lookupPackageCode, searchDrugNames } from "./rxnav.js";
 import * as N from "./native.js";
 import { renderSVG } from "uqr";
+import { areaAfterTap, bodyMapHtml } from "./body-map.js";
 
 const { esc, fmtTime, fmtClock, dayKey } = M;
 const $app = document.getElementById("app");
@@ -238,7 +239,8 @@ function eventSheet() {
     links.push({ key: ev.treatedWith, label: p.doses[ev.treatedWith] ? M.doseLinkLabel(p.doses[ev.treatedWith], p.meds) : "Earlier dose (no longer logged)" });
   return `<form class="stack" id="evform"><div class="eyebrow">${sh.evId ? "Edit event" : "Log event"}</div>
     <div class="opts" role="group" aria-label="Type of event">${Object.entries(M.EVENT_TYPES).map(([k, t]) => `<button type="button" class="tog" data-act="ev-type" data-type="${k}" aria-pressed="${ev.type === k}"><span aria-hidden="true">${t.icon}</span> ${esc(t.label)}</button>`).join("")}</div>
-    <div class="field"><label for="ev-area">Where (optional)</label><select id="ev-area" name="area"><option value="">Not set</option>${Object.entries(M.BODY_AREAS).map(([k, l]) => opt(k, l, ev.area)).join("")}</select></div>
+    <div class="field"><div class="lbl" id="ev-where">Where (optional)</div>${bodyMapHtml(ev.area)}
+      <label for="ev-area">Or choose from the list</label><select id="ev-area" name="area"><option value="">Not set</option>${Object.entries(M.BODY_AREAS).map(([k, l]) => opt(k, l, ev.area)).join("")}</select></div>
     <div class="field"><div class="lbl" id="ev-sev-l">How bad (optional)</div><div class="opts" role="group" aria-labelledby="ev-sev-l">${toggles("ev-sev", M.SEVERITIES, ev.severity)}</div></div>
     ${ev.type === "bleed" ? `<div class="field"><div class="lbl" id="ev-cause-l">Cause (optional)</div><div class="opts" role="group" aria-labelledby="ev-cause-l">${toggles("ev-cause", M.BLEED_CAUSES, ev.cause)}</div></div>` : ""}
     ${ev.type === "activity" ? `<div class="field"><label for="ev-dur">How long (optional)</label><div class="amount"><input id="ev-dur" name="durationMin" type="number" min="1" max="1440" inputmode="numeric" value="${esc(ev.durationMin)}"><span>minutes</span></div></div>` : ""}
@@ -786,6 +788,12 @@ document.addEventListener("input", e => {
 });
 // Type, frequency and supply-unit pickers redraw the form so only the relevant fields show.
 document.addEventListener("change", e => {
+  if (e.target.id === "ev-area" && S.sheet?.ev) {
+    readEventForm();
+    render();
+    document.getElementById("ev-area")?.focus({ preventScroll: true });
+    return;
+  }
   if (!e.target.matches("#medform [data-live]")) return;
   readForm(); render();
   const again = document.querySelector(`#medform [name="${e.target.name}"]${e.target.type === "radio" ? `[value="${e.target.value}"]` : ""}`);
@@ -796,6 +804,7 @@ document.addEventListener("click", async e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   const act = el.dataset.act, pid = el.dataset.pid || S.pid;
   if (act === "close-sheet" && el.classList.contains("overlay") && e.target !== el) return;
+  let refocus = "";
   try {
     switch (act) {
       case "well": {
@@ -823,6 +832,14 @@ document.addEventListener("click", async e => {
       case "ev-type": readEventForm(); S.sheet.ev.type = el.dataset.type; break;
       case "ev-sev": readEventForm(); S.sheet.ev.severity = S.sheet.ev.severity === Number(el.dataset.v) ? null : Number(el.dataset.v); break;
       case "ev-cause": readEventForm(); S.sheet.ev.cause = S.sheet.ev.cause === el.dataset.v ? null : el.dataset.v; break;
+      case "ev-area": {
+        if (!S.sheet?.ev) break;
+        readEventForm();
+        const next = el.dataset.area;
+        S.sheet.ev.area = areaAfterTap(S.sheet.ev.area, next);
+        refocus = `.body-hit[data-area="${CSS.escape(next)}"][data-side="${CSS.escape(el.dataset.side || "")}"]`;
+        break;
+      }
       case "ev-delete":
         readEventForm(); if (!S.sheet.confirmDelete) { S.sheet.confirmDelete = true; break; }
         await S.store.deleteEvent(S.sheet.pid, S.sheet.evId); S.sheet = null; toast("Event deleted"); break;
@@ -957,6 +974,7 @@ document.addEventListener("click", async e => {
     }
   } catch (err) { toast(err.message || String(err)); }
   render();
+  if (refocus) document.querySelector(refocus)?.focus({ preventScroll: true });
 });
 
 document.addEventListener("submit", async e => {
