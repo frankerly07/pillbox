@@ -229,7 +229,7 @@ describe("logged dose times", () => {
     expect(editedLogTime(T(4, 11, 0), "", now)).toBeNull();
   });
   it("labels extra doses without a scheduled time", () => {
-    expect(fmtDoseTimes({ day, time: "08:14", log: { status: "taken", extra: true, at: T(4, 8, 14) } })).toBe("Extra dose · Taken 8:14 AM");
+    expect(fmtDoseTimes({ day, time: "08:14", log: { status: "taken", extra: true, at: T(4, 8, 14) } })).toBe("Additional treatment · Taken 8:14 AM");
   });
   it("reads a time just after midnight as the next day for a late-evening dose", () => {
     const later = new Date(2026, 10, 5, 7, 0).getTime();

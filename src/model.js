@@ -305,8 +305,13 @@ export function fmtLogged(log, day) {
   const d = new Date(log.at);
   return (log.status === "skipped" ? "Skipped " : "Taken ") + (day && dayKey(d) !== day ? WD[d.getDay()] + " " : "") + fmtTime(hm(d));
 }
-/** "Scheduled 8:00 AM · Taken 8:14 AM", or just "Scheduled 8:00 AM" before it's logged. */
-export const fmtDoseTimes = d => (d.log && d.log.extra ? "Extra dose" : "Scheduled " + fmtTime(d.time)) + (d.log && d.log.at ? " · " + fmtLogged(d.log, d.day) : "");
+/** What was actually logged, if the record saved a snapshot; otherwise the medicine's current dose. */
+export function administrationLabel(log, med) {
+  if (log && Number(log.amount) > 0 && log.unit) return qty(Number(log.amount), log.unit);
+  return doseLabel(med);
+}
+/** "Scheduled 8:00 AM · Taken 8:14 AM", or "Additional treatment · Taken …" for an unscheduled log. */
+export const fmtDoseTimes = d => (d.log && d.log.extra ? "Additional treatment" : "Scheduled " + fmtTime(d.time)) + (d.log && d.log.at ? " · " + fmtLogged(d.log, d.day) : "");
 /** Where the "Taken earlier?" picker starts: now for today's doses, the scheduled time for other days. */
 export const defaultLogTime = (day, scheduled, now = Date.now()) => day === dayKey(new Date(now)) ? hm(new Date(now)) : scheduled;
 /**

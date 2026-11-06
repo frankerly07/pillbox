@@ -1,51 +1,93 @@
 rules_version = '2';
-// Who can see what:
-//  - A patient owns patients/{their uid} and everything under it.
-//  - A caregiver can read and write a patient's data once linked (their uid is in `caregivers`).
-//  - A caregiver links by presenting a valid, unexpired 6-digit code the patient created.
+// Access is the signed-in user id, never a role chosen in the app.
+//
+// Linking is not a client write. Invites and the access map are written only by
+// Cloud Functions with the admin SDK. Those functions are NOT deployed from this
+// repository (they need the Firebase Blaze plan). Publishing these rules without
+// the functions turns caregiver linking off, which is intentional.
+//
+// A caregiver's phone cannot write another person's medicines, doses, supply, or
+// events directly. Viewing uses caregiverUids. Log-and-edit vs view-only is
+// enforced in the function (src/cloud-handlers.js), which a modified client
+// cannot skip because these rules deny the write.
 service cloud.firestore {
   match /databases/{database}/documents {
-    function authed() { return request.auth != null; }
-    function patient(pid) { return get(/databases/$(database)/documents/patients/$(pid)).data; }
-    function member(pid) {
-      let p = patient(pid);
-      return authed() && (request.auth.uid == p.ownerUid || request.auth.uid in p.caregivers);
+    function signedIn() { return request.auth != null; }
+    function parent(pid) { return get(/databases/$(database)/documents/patients/$(pid)).data; }
+    function canView(pid) {
+      return signedIn() && (
+        parent(pid).ownerUid == request.auth.uid
+        || (parent(pid).keys().hasAll(['caregiverUids']) && request.auth.uid in parent(pid).caregiverUids)
+      );
+    }
+    // Owners write their own records. Everyone else, including a linked caregiver, does not.
+    function canWrite(pid) {
+      return signedIn() && parent(pid).ownerUid == request.auth.uid;
+    }
+    function accessUnchanged() {
+      return request.resource.data.get('access', {}) == resource.data.get('access', {})
+        && request.resource.data.get('caregiverUids', []) == resource.data.get('caregiverUids', [])
+        && request.resource.data.get('caregivers', []) == resource.data.get('caregivers', [])
+        && request.resource.data.get('caregiverNames', {}) == resource.data.get('caregiverNames', {})
+        && request.resource.data.get('linkCode', '') == resource.data.get('linkCode', '')
+        && request.resource.data.get('linkCodeExpires', 0) == resource.data.get('linkCodeExpires', 0)
+        && request.resource.data.get('joinCode', '') == resource.data.get('joinCode', '')
+        && request.resource.data.ownerUid == resource.data.ownerUid;
     }
 
     match /users/{uid} {
-      allow read, write: if authed() && request.auth.uid == uid;
+      allow read, write: if signedIn() && request.auth.uid == uid;
     }
 
+    match /invites/{id} {
+      allow read, write: if false;
+    }
     match /linkCodes/{code} {
-      allow get: if authed();
-      allow create, update: if authed() && request.resource.data.patientId == request.auth.uid;
-      allow delete: if authed() && resource.data.patientId == request.auth.uid;
+      allow read, write: if false;
+    }
+    match /inviteFailures/{uid} {
+      allow read, write: if false;
     }
 
     match /patients/{pid} {
-      allow create: if authed() && pid == request.auth.uid
+      allow create: if signedIn() && pid == request.auth.uid
         && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.caregivers.size() == 0;
-      allow read: if authed() && (resource.data.ownerUid == request.auth.uid || request.auth.uid in resource.data.caregivers);
-      allow update: if authed() && (
-        // the patient
+        && request.resource.data.get('caregiverUids', []).size() == 0
+        && request.resource.data.get('access', {}).size() == 0
+        && request.resource.data.get('caregivers', []).size() == 0
+        && request.resource.data.get('linkCode', '') == '';
+      allow read: if signedIn() && (
         resource.data.ownerUid == request.auth.uid
-        // a linked caregiver: can edit details but not who is linked (except removing themselves)
-        || (request.auth.uid in resource.data.caregivers
-            && request.resource.data.ownerUid == resource.data.ownerUid
-            && (request.resource.data.caregivers == resource.data.caregivers
-                || resource.data.caregivers.removeAll([request.auth.uid]) == request.resource.data.caregivers))
-        // a new caregiver joining with the current code
-        || (!(request.auth.uid in resource.data.caregivers)
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['caregivers', 'caregiverNames', 'joinCode'])
-            && request.resource.data.joinCode == resource.data.linkCode
-            && resource.data.linkCodeExpires > request.time.toMillis()
-            && request.resource.data.caregivers.removeAll([request.auth.uid]) == resource.data.caregivers
-            && request.auth.uid in request.resource.data.caregivers)
+        || (resource.data.keys().hasAll(['caregiverUids']) && request.auth.uid in resource.data.caregiverUids)
       );
+      allow update: if signedIn() && resource.data.ownerUid == request.auth.uid && accessUnchanged();
+      allow delete: if false;
 
-      match /{sub}/{id} {
-        allow read, write: if (sub == "meds" || sub == "doses" || sub == "stock" || sub == "events") && member(pid);
+      match /meds/{id} {
+        allow read: if canView(pid);
+        allow write: if canWrite(pid);
+      }
+      match /doses/{id} {
+        allow read: if canView(pid);
+        allow write: if canWrite(pid);
+      }
+      match /stock/{id} {
+        allow read: if canView(pid);
+        allow write: if canWrite(pid);
+      }
+      match /events/{id} {
+        allow read: if canView(pid);
+        allow write: if canWrite(pid);
+      }
+      match /ops/{id} {
+        allow read: if canView(pid);
+        allow create: if canWrite(pid) && request.resource.data.opId == id;
+        allow update, delete: if false;
+      }
+      match /doseAudit/{id} {
+        allow read: if canView(pid);
+        allow create: if canWrite(pid);
+        allow update, delete: if false;
       }
     }
   }

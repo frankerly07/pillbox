@@ -103,6 +103,16 @@ nav.tabs a[aria-current="page"]{color:var(--accent);background:var(--accent-soft
 .small{font-size:.82rem}
 .toast{display:flex;align-items:center;gap:8px;border-radius:18px;width:max-content}
 .toast .toast-undo{color:var(--bg);min-height:32px;text-decoration:underline}
+.due-row{display:flex;gap:8px;align-items:stretch}
+.due-row .btn-sm{align-self:center}
+.log-one{display:flex;flex-direction:column;gap:2px;align-items:flex-start;text-align:left;flex:1;border-radius:18px;padding:16px 18px;background:var(--accent);border:0;color:var(--accent-ink);min-height:92px}
+.log-one .eyebrow{color:inherit;opacity:.85}
+.log-one .take-label{font-family:var(--f-display);font-size:1.35rem;font-weight:800;line-height:1.15}
+.log-one .take-meds{font-weight:400;opacity:.92}
+.role-choice{width:100%;text-align:left;border-radius:16px;min-height:56px;font-size:1.05rem}
+.qr{display:flex;justify-content:center;background:white;border-radius:16px;padding:12px}
+.qr svg{width:220px;height:220px}
+.view-switch{margin-bottom:2px}
 /* the one big button */
 .take-all{display:flex;flex-direction:column;gap:4px;align-items:flex-start;text-align:left;width:100%;border-radius:22px;padding:22px 20px;background:var(--accent);border:0;color:var(--accent-ink);min-height:120px}
 .take-all .eyebrow{color:inherit;opacity:.85}

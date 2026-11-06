@@ -90,5 +90,6 @@ jobs:
           make_latest: false
           body: |
             Built from ${{ github.sha }}.
-            Install Pillbox.apk on the patient's phone and Pillbox-Care.apk on the caregiver's phone.
+            Pillbox.apk is the app (com.pillbox.patient). It asks whether you take medicines, help someone, or both.
+            Pillbox-Care.apk is the older separate app (com.pillbox.care). Updating it keeps that app's data and explains how to export a backup. Android cannot move data between the two apps.
           files: out/*.apk

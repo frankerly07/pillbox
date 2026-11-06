@@ -4,20 +4,22 @@ import { fmtTime, dosesOn, reminderPlan, doseLabel, scheduleLabel, recurrenceOf,
 
 export const isNative = Capacitor.isNativePlatform();
 
-// Which app is this? The two APKs differ only by application id.
-export async function detectRole() {
+// Which installed package is this? com.pillbox.care is the older separate app.
+// It does not choose access. The unified app (com.pillbox.patient) asks how the person will use Pillbox.
+// `?role=care` still opens the legacy-package preview in a browser.
+export async function detectApp() {
   const q = new URLSearchParams(location.search).get("role");
-  if (q) return q === "care" || q === "caregiver" ? "caregiver" : "patient";
+  let legacyCarePackage = q === "care" || q === "caregiver";
   if (isNative) {
     try {
       const { App } = await import("@capacitor/app");
       // Never `return App` / `await App` from an async function: Capacitor plugin proxies trap
       // `.then`, so JS treats them as thenables and the await hangs forever on native.
       const info = await App.getInfo();
-      return info.id.endsWith(".care") ? "caregiver" : "patient";
+      legacyCarePackage = String(info.id || "").endsWith(".care");
     } catch (e) {}
   }
-  return "patient";
+  return { legacyCarePackage };
 }
 
 // ---------------- Reminders (real Android alarms) ----------------
@@ -243,4 +245,71 @@ export async function connectPillbox(onOpen, onStatus) {
     } else onStatus("Bluetooth isn't available on this device.");
   } catch (e) { onStatus("Couldn't connect: " + (e.message || e)); }
   function parse(msg) { const m = /OPEN:(\d+)/i.exec(msg.trim()); if (m) onOpen(Number(m[1])); }
+}
+
+// Package barcode scan. On Android this is ML Kit on the phone (the picture is not uploaded).
+// A browser with BarcodeDetector can scan too. Otherwise the person types the code.
+// This is not the caregiver invitation scanner.
+const PACKAGE_FORMATS = ["QrCode", "UpcA", "UpcE", "Ean13", "Ean8", "Code128", "Code39", "DataMatrix", "Itf", "Pdf417"];
+export function packageScanSupport() {
+  if (isNative) return "native";
+  if (typeof BarcodeDetector !== "undefined" && navigator.mediaDevices?.getUserMedia) return "browser";
+  return "manual";
+}
+export async function scanPackageBarcode() {
+  if (!isNative) return { ok: false, code: packageScanSupport() === "browser" ? "browser" : "unavailable" };
+  try {
+    const { BarcodeScanner, BarcodeFormat } = await import("@capacitor-mlkit/barcode-scanning");
+    const mod = await BarcodeScanner.isGoogleBarcodeScannerModuleAvailable();
+    if (!mod.available) {
+      await BarcodeScanner.installGoogleBarcodeScannerModule();
+      return { ok: false, code: "module" };
+    }
+    const formats = PACKAGE_FORMATS.map(name => BarcodeFormat[name]).filter(Boolean);
+    const { barcodes } = await BarcodeScanner.scan({ formats });
+    const text = barcodes && barcodes[0] && (barcodes[0].rawValue || barcodes[0].displayValue);
+    if (!text) return { ok: false, code: "cancelled" };
+    return { ok: true, text: String(text) };
+  } catch (e) {
+    const msg = String(e && (e.message || e) || "");
+    if (/cancel/i.test(msg)) return { ok: false, code: "cancelled" };
+    if (/denied|permission/i.test(msg)) return { ok: false, code: "denied" };
+    return { ok: false, code: "unavailable" };
+  }
+}
+let cancelBrowserScan = null;
+export function stopBrowserScan() { if (cancelBrowserScan) cancelBrowserScan(); }
+export async function startBrowserScan(video) {
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }); }
+  catch (e) {
+    const denied = e && (e.name === "NotAllowedError" || e.name === "PermissionDeniedError");
+    return { ok: false, code: denied ? "denied" : "unavailable" };
+  }
+  video.srcObject = stream;
+  try { await video.play(); } catch (e) {}
+  let det;
+  try { det = new BarcodeDetector({ formats: ["qr_code", "upc_a", "upc_e", "ean_13", "ean_8", "code_128", "code_39", "data_matrix", "itf", "pdf417"] }); }
+  catch (e) { try { det = new BarcodeDetector(); } catch (err) { stream.getTracks().forEach(t => t.stop()); return { ok: false, code: "unavailable" }; } }
+  return new Promise(resolve => {
+    let done = false;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      cancelBrowserScan = null;
+      stream.getTracks().forEach(t => t.stop());
+      resolve(result);
+    };
+    cancelBrowserScan = () => finish({ ok: false, code: "cancelled" });
+    const tick = async () => {
+      if (done) return;
+      try {
+        const codes = await det.detect(video);
+        const text = codes && codes[0] && codes[0].rawValue;
+        if (text) { finish({ ok: true, text: String(text) }); return; }
+      } catch (e) {}
+      if (!done) requestAnimationFrame(tick);
+    };
+    tick();
+  });
 }
