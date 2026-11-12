@@ -208,3 +208,19 @@ textarea{resize:vertical}
 .ev-notes{font-size:.92rem;overflow-wrap:anywhere}
 .cal-day{position:relative}
 .cal-day .ev-dot{position:absolute;top:5px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--bad)}
+/* tappable body dummy on the log-event sheet */
+.body-map{display:flex;flex-direction:column;gap:8px}
+.body-map p{margin:0}
+.body-hint{text-align:center}
+.body-fig{position:relative;width:min(100%,340px);margin:0 auto;color:var(--muted);user-select:none}
+.body-fig svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+.body-side{position:absolute;top:0;transform:translateX(-50%);font-family:var(--f-display);font-weight:800;font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--fg);pointer-events:none;line-height:1}
+.body-hit{position:absolute;transform:translate(-50%,-50%);padding:2px;min-height:0;min-width:0;display:flex;align-items:center;justify-content:center;text-align:center;font-size:.62rem;line-height:1.05;font-weight:800;letter-spacing:0;color:var(--fg);background:var(--surface);border:1.5px solid var(--line);white-space:normal;overflow:hidden;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.body-hit.circle{border-radius:50%}
+.body-hit.round{border-radius:14px}
+.body-hit[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);outline:2px solid var(--accent);outline-offset:1px;z-index:2}
+.body-hit:active{background:var(--accent-soft)}
+.body-hit .face{display:flex;gap:8px;transform:translateY(-3px);pointer-events:none}
+.body-hit .face i{width:5px;height:5px;border-radius:50%;background:currentColor;display:block}
+.body-picked{text-align:center;font-weight:800;min-height:1.4em}
+.body-picked.on{color:var(--accent)}
