@@ -121,7 +121,13 @@ describe("body map markup", () => {
     const left = tags.find(t => attr(t, "data-area") === "leftKnee");
     const right = tags.find(t => attr(t, "data-area") === "rightKnee");
     expect(Number(attr(left, "style").match(/left:([\d.]+)%/)[1])).toBeGreaterThan(Number(attr(right, "style").match(/left:([\d.]+)%/)[1]));
-    expect(html).toContain("Selected: Left knee");
+    expect(html).toMatch(/class="body-picked on"[^>]*>Left knee</);
+    expect(html).toContain("Tap where it happened");
+    expect(html).toContain("<path");
+    expect(html).toContain("<ellipse");
+    expect(html).toContain('data-tone="accent"');
+    expect(bodyMapHtml("leftKnee", "bad")).toContain('data-tone="bad"');
+    expect(bodyMapHtml("leftKnee", "nope")).toContain('data-tone="accent"');
     expect(html).toContain(`viewBox="0 0 ${FIGURE.w} ${FIGURE.h}"`);
   });
 
