@@ -240,7 +240,7 @@ function eventSheet() {
     links.push({ key: ev.treatedWith, label: p.doses[ev.treatedWith] ? M.doseLinkLabel(p.doses[ev.treatedWith], p.meds) : "Earlier dose (no longer logged)" });
   return `<form class="stack" id="evform"><div class="eyebrow">${sh.evId ? "Edit event" : "Log event"}</div>
     <div class="opts" role="group" aria-label="Type of event">${Object.entries(M.EVENT_TYPES).map(([k, t]) => `<button type="button" class="tog" data-act="ev-type" data-type="${k}" aria-pressed="${ev.type === k}"><span aria-hidden="true">${t.icon}</span> ${esc(t.label)}</button>`).join("")}</div>
-    <div class="field"><div class="lbl" id="ev-where">Where (optional)</div>${bodyMapHtml(ev.area)}
+    <div class="field"><div class="lbl" id="ev-where">Where (optional)</div>${bodyMapHtml(ev.area, ev.type === "bleed" ? "bad" : "accent")}
       <label for="ev-area">Or choose from the list</label><select id="ev-area" name="area"><option value="">Not set</option>${Object.entries(M.BODY_AREAS).map(([k, l]) => opt(k, l, ev.area)).join("")}</select></div>
     <div class="field"><div class="lbl" id="ev-sev-l">How bad (optional)</div><div class="opts" role="group" aria-labelledby="ev-sev-l">${toggles("ev-sev", M.SEVERITIES, ev.severity)}</div></div>
     ${ev.type === "bleed" ? `<div class="field"><div class="lbl" id="ev-cause-l">Cause (optional)</div><div class="opts" role="group" aria-labelledby="ev-cause-l">${toggles("ev-cause", M.BLEED_CAUSES, ev.cause)}</div></div>` : ""}

@@ -21,9 +21,16 @@ describe("body map areas", () => {
     expect(new Set([...bodyAreasOnFigure(), ...bodyAreasListOnly()])).toEqual(new Set(Object.keys(BODY_AREAS)));
   });
 
-  it("puts nose and mouth beside the head, and leaves Other to the list", () => {
-    // Nose and mouth/gums are real bleed sites, so they are on the figure as labeled
-    // buttons beside the jaw. A spot drawn on the face would be too small to tap.
+  it("puts nose and mouth in a row under the head, and leaves Other to the list", () => {
+    // Nose and mouth/gums are a compact chip row under the plain head, not labels
+    // floating beside it. The hit area stays large enough to tap.
+    const head = BODY_HOTSPOTS.find(h => h.area === "head");
+    const nose = BODY_HOTSPOTS.find(h => h.area === "nose");
+    const mouth = BODY_HOTSPOTS.find(h => h.area === "mouth");
+    expect(nose.cy).toBeGreaterThan(head.cy + head.hh / 2 - 4);
+    expect(mouth.cy).toBe(nose.cy);
+    expect(Math.abs(nose.cx - FIGURE.midX)).toBeLessThan(head.hw);
+    expect(Math.abs(mouth.cx - FIGURE.midX)).toBeLessThan(head.hw);
     expect(bodyAreasOnFigure()).toEqual(expect.arrayContaining(["nose", "mouth", "head", "stomach"]));
     expect(bodyAreasListOnly()).toEqual(["other"]);
   });
@@ -107,8 +114,8 @@ describe("body map markup", () => {
   it("labels Left and Right, with Left on the viewer's right", () => {
     expect(html).toContain(">Left<");
     expect(html).toContain(">Right<");
-    const left = Number(html.match(/patient-left" style="left:([\d.]+)%"/)[1]);
-    const right = Number(html.match(/patient-right" style="left:([\d.]+)%"/)[1]);
+    const left = Number(html.match(/patient-left" style="left:([\d.]+)%/)[1]);
+    const right = Number(html.match(/patient-right" style="left:([\d.]+)%/)[1]);
     expect(left).toBeGreaterThan(50);
     expect(right).toBeLessThan(50);
   });
@@ -121,7 +128,16 @@ describe("body map markup", () => {
     const left = tags.find(t => attr(t, "data-area") === "leftKnee");
     const right = tags.find(t => attr(t, "data-area") === "rightKnee");
     expect(Number(attr(left, "style").match(/left:([\d.]+)%/)[1])).toBeGreaterThan(Number(attr(right, "style").match(/left:([\d.]+)%/)[1]));
-    expect(html).toContain("Selected: Left knee");
+    expect(html).toMatch(/class="body-picked on"[^>]*>Left knee</);
+    expect(html).toContain("Tap where it happened");
+    expect(html).toContain("<path");
+    expect(html).toContain("<ellipse");
+    expect(html).not.toContain("face-deco");
+    expect(html).not.toContain(">Stomach<");
+    expect(bodyMapHtml("stomach")).toContain(">Stomach<");
+    expect(html).toContain('data-tone="accent"');
+    expect(bodyMapHtml("leftKnee", "bad")).toContain('data-tone="bad"');
+    expect(bodyMapHtml("leftKnee", "nope")).toContain('data-tone="accent"');
     expect(html).toContain(`viewBox="0 0 ${FIGURE.w} ${FIGURE.h}"`);
   });
 
