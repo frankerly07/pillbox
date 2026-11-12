@@ -1,4 +1,4 @@
-// Pillbox Cloud Functions — NOT DEPLOYED.
+// PillAlly Cloud Functions — NOT DEPLOYED.
 //
 // Billing: Cloud Functions need the Firebase Blaze plan. This file does not enable
 // billing, does not call `firebase deploy`, and refuses to register handlers unless
@@ -13,7 +13,7 @@ import { acceptInvite, commitDose, createInvite, planDoseCommit, previewInvite, 
 
 export const handlers = { createInvite, previewInvite, acceptInvite, revokeCaregiver, commitDose, planDoseCommit };
 
-const REFUSE = "Refusing to register Pillbox Cloud Functions. They are not deployed. Deploying requires the Firebase Blaze plan (billing). This repository does not enable billing and does not contain credentials. Read the README before setting PILLBOX_FUNCTIONS_DEPLOY=1.";
+const REFUSE = "Refusing to register PillAlly Cloud Functions. They are not deployed. Deploying requires the Firebase Blaze plan (billing). This repository does not enable billing and does not contain credentials. Read the README before setting PILLBOX_FUNCTIONS_DEPLOY=1.";
 
 export async function register() {
   if (process.env.PILLBOX_FUNCTIONS_DEPLOY !== "1") throw new Error(REFUSE);

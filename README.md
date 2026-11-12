@@ -1,6 +1,6 @@
-# Pillbox
+# PillAlly
 
-One Android app for taking medicines, helping someone else, or both. The product name is Pillbox.
+One Android app for taking medicines, helping someone else, or both. The name on the phone is PillAlly. The GitHub repository remains [frankerly07/pillbox](https://github.com/frankerly07/pillbox).
 
 On first open you choose what you see: **I take medicines**, **I help someone else**, or **Both**. You can switch later. That choice only changes the screens on this phone. It does not open another person's medicines.
 
@@ -12,24 +12,24 @@ Today, each medicine that is due has its own button. One tap logs the saved amou
 
 Every push to `main` builds the apps on GitHub Actions and publishes them. Download them from the **Latest build** release:
 
-- **`Pillbox.apk`** (`com.pillbox.patient`) is the app to install. A new build installs over an older Pillbox and keeps that app's records.
-- **`Pillbox-Care.apk`** (`com.pillbox.care`) is the older separate app. Keep installing updates of it if you already use it: the update does not delete its records. It tells you how to export a backup. New phones should use Pillbox.apk only.
+- **`Pillbox.apk`** (`com.pillbox.patient`) is the app to install. On the home screen it is named PillAlly. A new build installs over an earlier install of this same app and keeps that app's records.
+- **`Pillbox-Care.apk`** (`com.pillbox.care`) is the older separate app. On the home screen it is named PillAlly Care. Keep installing updates of it if you already use it: the update does not delete its records. It tells you how to export a backup. New phones should use Pillbox.apk only.
 
 On the phone, open the file and allow "Install unknown apps" for your browser or Files app when Android asks. Both builds are signed with the same key, which is never stored in the repository: it lives in the private GitHub Actions cache, or in `PILLBOX_KEYSTORE_B64` and `PILLBOX_KEYSTORE_PASSWORD` if you add those secrets.
 
-## Moving off the separate Pillbox Care app
+## Moving off the separate PillAlly Care app
 
-Android gives each application id its own storage. Pillbox cannot read Pillbox Care's data, and this project does not delete either one.
+Android gives each application id its own storage. PillAlly cannot read PillAlly Care's data, and this project does not delete either one.
 
-1. Open the Pillbox Care app that is already installed. Use **Export backup**. That downloads `pillbox-backup.json` with medicines, logs, events, and supply history. It does not include account passwords or invite codes.
-2. Install or open **Pillbox** (`com.pillbox.patient`). Choose how you use it, then **More** or **Settings › Import backup** and pick the file.
+1. Open the PillAlly Care app that is already installed. Use **Export backup**. That downloads `pillbox-backup.json` with medicines, logs, events, and supply history. It does not include account passwords or invite codes.
+2. Install or open **PillAlly** (`com.pillbox.patient`). Choose how you use it, then **More** or **Settings › Import backup** and pick the file.
 3. Imported people are marked **on this phone only**. The file is not a live link to another phone.
 
-If Pillbox Care has no records you need, you can leave it installed. Uninstalling it deletes only that app's data.
+If PillAlly Care has no records you need, you can leave it installed. Uninstalling it deletes only that app's data.
 
 ## On this phone, and real sync
 
-Until `src/firebase-config.js` has a config, Pillbox is **on this phone only**. It does not create a code, show a QR, or pretend that another phone is connected. Example medicines, when you start empty, are labeled as examples.
+Until `src/firebase-config.js` has a config, PillAlly is **on this phone only**. It does not create a code, show a QR, or pretend that another phone is connected. Example medicines, when you start empty, are labeled as examples.
 
 Real linking needs all of the following. None of them are done by this repository:
 
@@ -87,7 +87,7 @@ When compartment N's lid opens, the device sends the text `OPEN:N`. In the app, 
 
 ```
 npm install
-npm run dev            # http://localhost:5173 — ?role=care previews the old Pillbox Care package
+npm run dev            # http://localhost:5173 — ?role=care previews the older separate PillAlly Care app
 npm run sync           # build the web app and copy it into the Android project
 ```
 

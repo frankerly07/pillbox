@@ -1,6 +1,6 @@
 {
   "appId": "com.pillbox.patient",
-  "appName": "Pillbox",
+  "appName": "PillAlly",
   "webDir": "dist",
   "plugins": {
     "LocalNotifications": { "smallIcon": "ic_stat_pill", "iconColor": "#17705E" }

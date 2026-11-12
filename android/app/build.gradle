@@ -22,14 +22,14 @@ android {
         patient {
             dimension "role"
             applicationId "com.pillbox.patient"
-            resValue "string", "app_name", "Pillbox"
-            resValue "string", "title_activity_main", "Pillbox"
+            resValue "string", "app_name", "PillAlly"
+            resValue "string", "title_activity_main", "PillAlly"
         }
         caregiver {
             dimension "role"
             applicationId "com.pillbox.care"
-            resValue "string", "app_name", "Pillbox Care"
-            resValue "string", "title_activity_main", "Pillbox Care"
+            resValue "string", "app_name", "PillAlly Care"
+            resValue "string", "title_activity_main", "PillAlly Care"
         }
     }
     // The signing key is never stored in the repo. GitHub Actions passes it in through environment
