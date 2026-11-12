@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "sync": "vite build && cap sync android",
-    "test": "vitest run"
+    "test": "vitest run",
+    "icons": "node scripts/apply-pillally-logo.mjs"
   },
   "dependencies": {
     "@capacitor-community/bluetooth-le": "^8.3.0",
@@ -24,6 +25,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^8.6.0",
+    "sharp": "^0.35.5",
     "vite": "^8.3.5",
     "vitest": "^5.1.0"
   }
