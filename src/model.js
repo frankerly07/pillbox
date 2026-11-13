@@ -551,7 +551,7 @@ export const BODY_AREAS = {
   leftElbow: "Left elbow", rightElbow: "Right elbow", leftHip: "Left hip", rightHip: "Right hip",
   leftShoulder: "Left shoulder", rightShoulder: "Right shoulder", leftWrist: "Left wrist", rightWrist: "Right wrist",
   leftHand: "Left hand", rightHand: "Right hand", leftFoot: "Left foot", rightFoot: "Right foot",
-  head: "Head", mouth: "Mouth / gums", nose: "Nose",
+  head: "Head", mouth: "Mouth / gums", nose: "Nose", chest: "Chest",
   muscleThigh: "Muscle (thigh)", muscleCalf: "Muscle (calf)", muscleArm: "Muscle (arm)",
   stomach: "Stomach", other: "Other",
 };

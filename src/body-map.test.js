@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { BODY_AREAS, normalizeEvent } from "./model.js";
 import {
   BODY_HOTSPOTS, FIGURE, bodyAreasOnFigure, bodyAreasListOnly, hotspotName, areaAfterTap, bodyMapHtml,
+  figureDisplayWidth, hitCssPx, normalizeFigure,
 } from "./body-map.js";
 
 const box = h => ({ l: h.cx - h.hw / 2, r: h.cx + h.hw / 2, t: h.cy - h.hh / 2, b: h.cy + h.hh / 2 });
@@ -147,6 +148,39 @@ describe("body map markup", () => {
     expect(pressed.map(t => attr(t, "data-area"))).toEqual(["muscleThigh", "muscleThigh"]);
     expect(pressed.map(t => attr(t, "data-side")).sort()).toEqual(["left", "right"]);
     expect(hotspotName({ area: "muscleThigh", side: "left" })).toBe("Muscle (thigh), on the person's left");
+  });
+
+  it("gives every stored place except Other a hit target on both figures", () => {
+    const ids = Object.keys(BODY_AREAS).filter(k => k !== "other");
+    expect(bodyAreasListOnly()).toEqual(["other"]);
+    expect(new Set(bodyAreasOnFigure())).toEqual(new Set(ids));
+    for (const figure of ["male", "female"]) {
+      for (const id of ids) {
+        const html = bodyMapHtml(id, "accent", figure);
+        const pressed = buttons(html).filter(t => attr(t, "aria-pressed") === "true");
+        expect(pressed.length, figure + " " + id).toBeGreaterThan(0);
+        expect(pressed.every(t => attr(t, "data-area") === id)).toBe(true);
+        expect(areaAfterTap("", id)).toBe(id);
+        expect(html).toContain('data-figure="' + figure + '"');
+      }
+    }
+    const maleAreas = buttons(bodyMapHtml("", "accent", "male")).map(t => attr(t, "data-area")).sort();
+    const femaleAreas = buttons(bodyMapHtml("", "accent", "female")).map(t => attr(t, "data-area")).sort();
+    expect(femaleAreas).toEqual(maleAreas);
+    expect(normalizeFigure("female")).toBe("female");
+    expect(normalizeFigure("nope")).toBe("male");
+    expect(normalizeFigure(undefined)).toBe("male");
+  });
+
+  it("keeps every hit at least 44px on a phone", () => {
+    for (const viewport of [360, 390, 412]) {
+      const width = figureDisplayWidth(viewport);
+      for (const h of BODY_HOTSPOTS) {
+        const size = hitCssPx(h, width);
+        expect(size.w, viewport + " " + h.area).toBeGreaterThanOrEqual(44);
+        expect(size.h, viewport + " " + h.area).toBeGreaterThanOrEqual(44);
+      }
+    }
   });
 
   it("ignores an unknown selection and escapes it", () => {
