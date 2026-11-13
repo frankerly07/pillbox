@@ -1,0 +1,893 @@
+{
+  "name": "PillAlly in-app palette",
+  "version": "1.0",
+  "brand": {
+    "navy": "#030423",
+    "blue": "#2965D2",
+    "purple_optional": "#7116D1",
+    "note": "Logo colours. Purple #7116D1 may be used as a rare decorative accent only. It fails WCAG 3:1 on navy (2.62:1), so do not use it for text, focus, or taken/missed/due states on dark surfaces. On white it is 7.67:1."
+  },
+  "css_variable_map": {
+    "--bg": "background",
+    "--surface": "surface",
+    "--elevated": "elevated",
+    "--sunk": "sunk",
+    "--line": "border",
+    "--fg": "primary_text",
+    "--muted": "muted_text",
+    "--accent": "primary_accent  (fills, borders)",
+    "--accent-text": "accent_text  (labels, links; NEW \u2014 required in dark mode)",
+    "--accent-ink": "accent_ink",
+    "--accent-soft": "accent_soft",
+    "--ok": "success",
+    "--ok-soft": "success_soft",
+    "--warn": "warning",
+    "--warn-soft": "warning_soft",
+    "--bad": "danger",
+    "--bad-soft": "danger_soft",
+    "--focus": "focus_ring"
+  },
+  "implementation_notes": [
+    "Keep --accent as #2965D2 for fills and borders in both modes.",
+    "Add --accent-text. In light mode it equals #2965D2; in dark mode it must be the lighter #7FA4E6. Logo blue on navy is only 3.72:1 and fails AA for small text (selected tab, Log event, My medicines).",
+    "Do not reuse the blue accent as the taken/on-time colour. --ok is a distinct green.",
+    "Caregiver no longer needs a separate accent; the app-wide blue already covers that role. Confirm with Frank before dropping the old caregiver override.",
+    "Nothing in this folder is approved for the live app until Frank says yes."
+  ],
+  "dark": {
+    "tokens": {
+      "background": {
+        "hex": "#030423",
+        "note": "Page canvas. Dark mode uses the logo navy."
+      },
+      "surface": {
+        "hex": "#12173A",
+        "note": "Cards, tab bar, log-event button fill, selected segment thumb."
+      },
+      "elevated": {
+        "hex": "#1A2050",
+        "note": "Sheets, dialogs, toast-adjacent raised surfaces. In light mode this is the same as surface (already white)."
+      },
+      "sunk": {
+        "hex": "#01021A",
+        "note": "Segment track, meter tracks, inset wells."
+      },
+      "border": {
+        "hex": "#32387A",
+        "note": "Card and input 1.5px strokes; tab-bar hairline."
+      },
+      "primary_accent": {
+        "hex": "#2965D2",
+        "note": "Logo blue. Use for fills, dashed/solid borders, key chrome \u2014 not for small text on dark surfaces (see accent_text)."
+      },
+      "accent_text": {
+        "hex": "#7FA4E6",
+        "note": "Interactive labels, links, Log event, selected segment/tab text. Lighter than logo blue in dark mode so it meets 4.5:1."
+      },
+      "primary_text": {
+        "hex": "#E8EBF8",
+        "note": "Headings and body."
+      },
+      "muted_text": {
+        "hex": "#9AA0BC",
+        "note": "Eyebrows, hints, supporting copy, unselected tabs."
+      },
+      "success": {
+        "hex": "#3DCF8A",
+        "note": "Taken / on-time. A true green, kept distinct from the blue accent."
+      },
+      "warning": {
+        "hex": "#F0B04A",
+        "note": "Due / late. Light-mode warning is darker than the current #B26B00 so it meets 4.5:1 on white and on the page background."
+      },
+      "danger": {
+        "hex": "#F2867C",
+        "note": "Missed / error / refill."
+      },
+      "button_fill": {
+        "hex": "#2965D2",
+        "note": "Primary filled buttons (e.g. I took my medicine). Same as primary_accent."
+      },
+      "button_text": {
+        "hex": "#FFFFFF",
+        "note": "Text and icons on button_fill. White passes 5.4:1 on #2965D2."
+      },
+      "tab_selected_bg": {
+        "hex": "#1A2A58",
+        "note": "Selected tab pill (maps to accent_soft)."
+      },
+      "tab_selected_text": {
+        "hex": "#7FA4E6",
+        "note": "Selected tab label (maps to accent_text)."
+      },
+      "tab_unselected": {
+        "hex": "#9AA0BC",
+        "note": "Inactive tab labels (maps to muted_text)."
+      },
+      "focus_ring": {
+        "hex": "#7FA4E6",
+        "note": "3px focus outline. Dark mode uses the lighter accent so the ring stays 3:1 on elevated surfaces; logo blue on #1A2050 is only 2.84:1."
+      },
+      "accent_soft": {
+        "hex": "#1A2A58",
+        "note": "Selected-tab / chip / toggle wash."
+      },
+      "success_soft": {
+        "hex": "#0C2A1C",
+        "note": "Taken chips, on-time calendar days, success banners."
+      },
+      "warning_soft": {
+        "hex": "#3A2B10",
+        "note": "Due wells and warning banners."
+      },
+      "danger_soft": {
+        "hex": "#3D1A17",
+        "note": "Missed wells and error banners."
+      },
+      "accent_ink": {
+        "hex": "#FFFFFF",
+        "note": "Ink on a primary_accent fill (checkmarks on a blue or filled-accent control). White."
+      }
+    },
+    "contrast": [
+      {
+        "pair": "Primary text on background",
+        "fg": "#E8EBF8",
+        "fg_token": "primary_text",
+        "bg": "#030423",
+        "bg_token": "background",
+        "ratio": 16.9,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Primary text on surface",
+        "fg": "#E8EBF8",
+        "fg_token": "primary_text",
+        "bg": "#12173A",
+        "bg_token": "surface",
+        "ratio": 14.61,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Primary text on elevated",
+        "fg": "#E8EBF8",
+        "fg_token": "primary_text",
+        "bg": "#1A2050",
+        "bg_token": "elevated",
+        "ratio": 12.93,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Primary text on sunk",
+        "fg": "#E8EBF8",
+        "fg_token": "primary_text",
+        "bg": "#01021A",
+        "bg_token": "sunk",
+        "ratio": 17.24,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Muted text on background",
+        "fg": "#9AA0BC",
+        "fg_token": "muted_text",
+        "bg": "#030423",
+        "bg_token": "background",
+        "ratio": 7.77,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Muted text on surface",
+        "fg": "#9AA0BC",
+        "fg_token": "muted_text",
+        "bg": "#12173A",
+        "bg_token": "surface",
+        "ratio": 6.72,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Muted text on elevated",
+        "fg": "#9AA0BC",
+        "fg_token": "muted_text",
+        "bg": "#1A2050",
+        "bg_token": "elevated",
+        "ratio": 5.95,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Muted text on sunk",
+        "fg": "#9AA0BC",
+        "fg_token": "muted_text",
+        "bg": "#01021A",
+        "bg_token": "sunk",
+        "ratio": 7.93,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Accent text on background",
+        "fg": "#7FA4E6",
+        "fg_token": "accent_text",
+        "bg": "#030423",
+        "bg_token": "background",
+        "ratio": 7.99,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Accent text on surface",
+        "fg": "#7FA4E6",
+        "fg_token": "accent_text",
+        "bg": "#12173A",
+        "bg_token": "surface",
+        "ratio": 6.91,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Accent text on elevated",
+        "fg": "#7FA4E6",
+        "fg_token": "accent_text",
+        "bg": "#1A2050",
+        "bg_token": "elevated",
+        "ratio": 6.11,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Accent text on accent-soft (selected tab / chips)",
+        "fg": "#7FA4E6",
+        "fg_token": "accent_text",
+        "bg": "#1A2A58",
+        "bg_token": "accent_soft",
+        "ratio": 5.51,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Button text on button fill",
+        "fg": "#FFFFFF",
+        "fg_token": "button_text",
+        "bg": "#2965D2",
+        "bg_token": "button_fill",
+        "ratio": 5.4,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Tab selected text on tab selected background",
+        "fg": "#7FA4E6",
+        "fg_token": "tab_selected_text",
+        "bg": "#1A2A58",
+        "bg_token": "tab_selected_bg",
+        "ratio": 5.51,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Tab unselected on surface (tab bar)",
+        "fg": "#9AA0BC",
+        "fg_token": "tab_unselected",
+        "bg": "#12173A",
+        "bg_token": "surface",
+        "ratio": 6.72,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Success on background",
+        "fg": "#3DCF8A",
+        "fg_token": "success",
+        "bg": "#030423",
+        "bg_token": "background",
+        "ratio": 10.03,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Success on surface",
+        "fg": "#3DCF8A",
+        "fg_token": "success",
+        "bg": "#12173A",
+        "bg_token": "surface",
+        "ratio": 8.67,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Success on success-soft",
+        "fg": "#3DCF8A",
+        "fg_token": "success",
+        "bg": "#0C2A1C",
+        "bg_token": "success_soft",
+        "ratio": 7.69,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Warning on background",
+        "fg": "#F0B04A",
+        "fg_token": "warning",
+        "bg": "#030423",
+        "bg_token": "background",
+        "ratio": 10.53,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Warning on surface",
+        "fg": "#F0B04A",
+        "fg_token": "warning",
+        "bg": "#12173A",
+        "bg_token": "surface",
+        "ratio": 9.11,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Warning on warning-soft",
+        "fg": "#F0B04A",
+        "fg_token": "warning",
+        "bg": "#3A2B10",
+        "bg_token": "warning_soft",
+        "ratio": 7.18,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Danger on background",
+        "fg": "#F2867C",
+        "fg_token": "danger",
+        "bg": "#030423",
+        "bg_token": "background",
+        "ratio": 8.11,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Danger on surface",
+        "fg": "#F2867C",
+        "fg_token": "danger",
+        "bg": "#12173A",
+        "bg_token": "surface",
+        "ratio": 7.01,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Danger on danger-soft",
+        "fg": "#F2867C",
+        "fg_token": "danger",
+        "bg": "#3D1A17",
+        "bg_token": "danger_soft",
+        "ratio": 6.24,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Primary accent (fill/border) vs background, UI 3:1",
+        "fg": "#2965D2",
+        "fg_token": "primary_accent",
+        "bg": "#030423",
+        "bg_token": "background",
+        "ratio": 3.72,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      },
+      {
+        "pair": "Primary accent vs surface, UI 3:1",
+        "fg": "#2965D2",
+        "fg_token": "primary_accent",
+        "bg": "#12173A",
+        "bg_token": "surface",
+        "ratio": 3.21,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      },
+      {
+        "pair": "Focus ring vs background, UI 3:1",
+        "fg": "#7FA4E6",
+        "fg_token": "focus_ring",
+        "bg": "#030423",
+        "bg_token": "background",
+        "ratio": 7.99,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      },
+      {
+        "pair": "Focus ring vs surface, UI 3:1",
+        "fg": "#7FA4E6",
+        "fg_token": "focus_ring",
+        "bg": "#12173A",
+        "bg_token": "surface",
+        "ratio": 6.91,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      },
+      {
+        "pair": "Focus ring vs elevated, UI 3:1",
+        "fg": "#7FA4E6",
+        "fg_token": "focus_ring",
+        "bg": "#1A2050",
+        "bg_token": "elevated",
+        "ratio": 6.11,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      },
+      {
+        "pair": "Button fill vs background, UI 3:1",
+        "fg": "#2965D2",
+        "fg_token": "button_fill",
+        "bg": "#030423",
+        "bg_token": "background",
+        "ratio": 3.72,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      }
+    ]
+  },
+  "light": {
+    "tokens": {
+      "background": {
+        "hex": "#EEF1F8",
+        "note": "Page canvas. Dark mode uses the logo navy."
+      },
+      "surface": {
+        "hex": "#FFFFFF",
+        "note": "Cards, tab bar, log-event button fill, selected segment thumb."
+      },
+      "elevated": {
+        "hex": "#FFFFFF",
+        "note": "Sheets, dialogs, toast-adjacent raised surfaces. In light mode this is the same as surface (already white)."
+      },
+      "sunk": {
+        "hex": "#E2E6F2",
+        "note": "Segment track, meter tracks, inset wells."
+      },
+      "border": {
+        "hex": "#C8CEE0",
+        "note": "Card and input 1.5px strokes; tab-bar hairline."
+      },
+      "primary_accent": {
+        "hex": "#2965D2",
+        "note": "Logo blue. Use for fills, dashed/solid borders, key chrome \u2014 not for small text on dark surfaces (see accent_text)."
+      },
+      "accent_text": {
+        "hex": "#2965D2",
+        "note": "Interactive labels, links, Log event, selected segment/tab text. Lighter than logo blue in dark mode so it meets 4.5:1."
+      },
+      "primary_text": {
+        "hex": "#030423",
+        "note": "Headings and body."
+      },
+      "muted_text": {
+        "hex": "#555C78",
+        "note": "Eyebrows, hints, supporting copy, unselected tabs."
+      },
+      "success": {
+        "hex": "#0D6E43",
+        "note": "Taken / on-time. A true green, kept distinct from the blue accent."
+      },
+      "warning": {
+        "hex": "#8A5500",
+        "note": "Due / late. Light-mode warning is darker than the current #B26B00 so it meets 4.5:1 on white and on the page background."
+      },
+      "danger": {
+        "hex": "#B3261E",
+        "note": "Missed / error / refill."
+      },
+      "button_fill": {
+        "hex": "#2965D2",
+        "note": "Primary filled buttons (e.g. I took my medicine). Same as primary_accent."
+      },
+      "button_text": {
+        "hex": "#FFFFFF",
+        "note": "Text and icons on button_fill. White passes 5.4:1 on #2965D2."
+      },
+      "tab_selected_bg": {
+        "hex": "#E8F0FC",
+        "note": "Selected tab pill (maps to accent_soft)."
+      },
+      "tab_selected_text": {
+        "hex": "#2965D2",
+        "note": "Selected tab label (maps to accent_text)."
+      },
+      "tab_unselected": {
+        "hex": "#555C78",
+        "note": "Inactive tab labels (maps to muted_text)."
+      },
+      "focus_ring": {
+        "hex": "#2965D2",
+        "note": "3px focus outline. Dark mode uses the lighter accent so the ring stays 3:1 on elevated surfaces; logo blue on #1A2050 is only 2.84:1."
+      },
+      "accent_soft": {
+        "hex": "#E8F0FC",
+        "note": "Selected-tab / chip / toggle wash."
+      },
+      "success_soft": {
+        "hex": "#D7F3E4",
+        "note": "Taken chips, on-time calendar days, success banners."
+      },
+      "warning_soft": {
+        "hex": "#FBEBD0",
+        "note": "Due wells and warning banners."
+      },
+      "danger_soft": {
+        "hex": "#F8DEDB",
+        "note": "Missed wells and error banners."
+      },
+      "accent_ink": {
+        "hex": "#FFFFFF",
+        "note": "Ink on a primary_accent fill (checkmarks on a blue or filled-accent control). White."
+      }
+    },
+    "contrast": [
+      {
+        "pair": "Primary text on background",
+        "fg": "#030423",
+        "fg_token": "primary_text",
+        "bg": "#EEF1F8",
+        "bg_token": "background",
+        "ratio": 17.76,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Primary text on surface",
+        "fg": "#030423",
+        "fg_token": "primary_text",
+        "bg": "#FFFFFF",
+        "bg_token": "surface",
+        "ratio": 20.09,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Primary text on elevated",
+        "fg": "#030423",
+        "fg_token": "primary_text",
+        "bg": "#FFFFFF",
+        "bg_token": "elevated",
+        "ratio": 20.09,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Primary text on sunk",
+        "fg": "#030423",
+        "fg_token": "primary_text",
+        "bg": "#E2E6F2",
+        "bg_token": "sunk",
+        "ratio": 16.1,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Muted text on background",
+        "fg": "#555C78",
+        "fg_token": "muted_text",
+        "bg": "#EEF1F8",
+        "bg_token": "background",
+        "ratio": 5.83,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Muted text on surface",
+        "fg": "#555C78",
+        "fg_token": "muted_text",
+        "bg": "#FFFFFF",
+        "bg_token": "surface",
+        "ratio": 6.59,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Muted text on elevated",
+        "fg": "#555C78",
+        "fg_token": "muted_text",
+        "bg": "#FFFFFF",
+        "bg_token": "elevated",
+        "ratio": 6.59,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Muted text on sunk",
+        "fg": "#555C78",
+        "fg_token": "muted_text",
+        "bg": "#E2E6F2",
+        "bg_token": "sunk",
+        "ratio": 5.28,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Accent text on background",
+        "fg": "#2965D2",
+        "fg_token": "accent_text",
+        "bg": "#EEF1F8",
+        "bg_token": "background",
+        "ratio": 4.78,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Accent text on surface",
+        "fg": "#2965D2",
+        "fg_token": "accent_text",
+        "bg": "#FFFFFF",
+        "bg_token": "surface",
+        "ratio": 5.4,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Accent text on elevated",
+        "fg": "#2965D2",
+        "fg_token": "accent_text",
+        "bg": "#FFFFFF",
+        "bg_token": "elevated",
+        "ratio": 5.4,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Accent text on accent-soft (selected tab / chips)",
+        "fg": "#2965D2",
+        "fg_token": "accent_text",
+        "bg": "#E8F0FC",
+        "bg_token": "accent_soft",
+        "ratio": 4.71,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Button text on button fill",
+        "fg": "#FFFFFF",
+        "fg_token": "button_text",
+        "bg": "#2965D2",
+        "bg_token": "button_fill",
+        "ratio": 5.4,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Tab selected text on tab selected background",
+        "fg": "#2965D2",
+        "fg_token": "tab_selected_text",
+        "bg": "#E8F0FC",
+        "bg_token": "tab_selected_bg",
+        "ratio": 4.71,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Tab unselected on surface (tab bar)",
+        "fg": "#555C78",
+        "fg_token": "tab_unselected",
+        "bg": "#FFFFFF",
+        "bg_token": "surface",
+        "ratio": 6.59,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Success on background",
+        "fg": "#0D6E43",
+        "fg_token": "success",
+        "bg": "#EEF1F8",
+        "bg_token": "background",
+        "ratio": 5.58,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Success on surface",
+        "fg": "#0D6E43",
+        "fg_token": "success",
+        "bg": "#FFFFFF",
+        "bg_token": "surface",
+        "ratio": 6.31,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Success on success-soft",
+        "fg": "#0D6E43",
+        "fg_token": "success",
+        "bg": "#D7F3E4",
+        "bg_token": "success_soft",
+        "ratio": 5.36,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Warning on background",
+        "fg": "#8A5500",
+        "fg_token": "warning",
+        "bg": "#EEF1F8",
+        "bg_token": "background",
+        "ratio": 5.49,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Warning on surface",
+        "fg": "#8A5500",
+        "fg_token": "warning",
+        "bg": "#FFFFFF",
+        "bg_token": "surface",
+        "ratio": 6.21,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Warning on warning-soft",
+        "fg": "#8A5500",
+        "fg_token": "warning",
+        "bg": "#FBEBD0",
+        "bg_token": "warning_soft",
+        "ratio": 5.29,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Danger on background",
+        "fg": "#B3261E",
+        "fg_token": "danger",
+        "bg": "#EEF1F8",
+        "bg_token": "background",
+        "ratio": 5.78,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Danger on surface",
+        "fg": "#B3261E",
+        "fg_token": "danger",
+        "bg": "#FFFFFF",
+        "bg_token": "surface",
+        "ratio": 6.54,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Danger on danger-soft",
+        "fg": "#B3261E",
+        "fg_token": "danger",
+        "bg": "#F8DEDB",
+        "bg_token": "danger_soft",
+        "ratio": 5.12,
+        "minimum": 4.5,
+        "kind": "text",
+        "pass": true
+      },
+      {
+        "pair": "Primary accent (fill/border) vs background, UI 3:1",
+        "fg": "#2965D2",
+        "fg_token": "primary_accent",
+        "bg": "#EEF1F8",
+        "bg_token": "background",
+        "ratio": 4.78,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      },
+      {
+        "pair": "Primary accent vs surface, UI 3:1",
+        "fg": "#2965D2",
+        "fg_token": "primary_accent",
+        "bg": "#FFFFFF",
+        "bg_token": "surface",
+        "ratio": 5.4,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      },
+      {
+        "pair": "Focus ring vs background, UI 3:1",
+        "fg": "#2965D2",
+        "fg_token": "focus_ring",
+        "bg": "#EEF1F8",
+        "bg_token": "background",
+        "ratio": 4.78,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      },
+      {
+        "pair": "Focus ring vs surface, UI 3:1",
+        "fg": "#2965D2",
+        "fg_token": "focus_ring",
+        "bg": "#FFFFFF",
+        "bg_token": "surface",
+        "ratio": 5.4,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      },
+      {
+        "pair": "Focus ring vs elevated, UI 3:1",
+        "fg": "#2965D2",
+        "fg_token": "focus_ring",
+        "bg": "#FFFFFF",
+        "bg_token": "elevated",
+        "ratio": 5.4,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      },
+      {
+        "pair": "Button fill vs background, UI 3:1",
+        "fg": "#2965D2",
+        "fg_token": "button_fill",
+        "bg": "#EEF1F8",
+        "bg_token": "background",
+        "ratio": 4.78,
+        "minimum": 3.0,
+        "kind": "ui",
+        "pass": true
+      }
+    ]
+  }
+}
