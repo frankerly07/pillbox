@@ -20,7 +20,8 @@ const S = {
   editing: null, sheet: null, drug: null, alert: null, ble: "Not connected", invite: null, invitePreview: null, auth: { mode: "signin", error: "" },
   settings: loadSettings(), perm: "default",
 };
-function loadSettings() { try { return { dueWindowMin: 60, ...JSON.parse(localStorage.getItem("pillbox.settings") || "{}") }; } catch (e) { return { dueWindowMin: 60 }; } }
+function loadSettings() { try { return { dueWindowMin: 60, bodyFigure: "male", ...JSON.parse(localStorage.getItem("pillbox.settings") || "{}") }; } catch (e) { return { dueWindowMin: 60, bodyFigure: "male" }; } }
+function bodyFigure() { return S.settings.bodyFigure === "female" ? "female" : "male"; }
 function saveSettings() { try { localStorage.setItem("pillbox.settings", JSON.stringify(S.settings)); } catch (e) {} }
 const opts = () => ({ now: Date.now(), dueWindowMin: S.settings.dueWindowMin });
 const snap = (pid = S.pid) => S.snaps[pid] || { meds: [], doses: {}, events: {}, name: "" };
@@ -240,8 +241,8 @@ function eventSheet() {
     links.push({ key: ev.treatedWith, label: p.doses[ev.treatedWith] ? M.doseLinkLabel(p.doses[ev.treatedWith], p.meds) : "Earlier dose (no longer logged)" });
   return `<form class="stack" id="evform"><div class="eyebrow">${sh.evId ? "Edit event" : "Log event"}</div>
     <div class="opts" role="group" aria-label="Type of event">${Object.entries(M.EVENT_TYPES).map(([k, t]) => `<button type="button" class="tog" data-act="ev-type" data-type="${k}" aria-pressed="${ev.type === k}"><span aria-hidden="true">${t.icon}</span> ${esc(t.label)}</button>`).join("")}</div>
-    <div class="field"><div class="lbl" id="ev-where">Where (optional)</div>${bodyMapHtml(ev.area, ev.type === "bleed" ? "bad" : "accent")}
-      <label for="ev-area">Or choose from the list</label><select id="ev-area" name="area"><option value="">Not set</option>${Object.entries(M.BODY_AREAS).map(([k, l]) => opt(k, l, ev.area)).join("")}</select></div>
+    <div class="field"><div class="lbl" id="ev-where">Where (optional)</div>${bodyMapHtml(ev.area, ev.type === "bleed" ? "bad" : "accent", bodyFigure())}
+      <label for="ev-area">Or choose from the list</label><select id="ev-area" name="area"><option value="">Not set</option>${Object.entries(M.BODY_AREAS).filter(([k]) => !M.LEGACY_BODY_AREAS.includes(k) || k === ev.area).map(([k, l]) => opt(k, l, ev.area)).join("")}</select></div>
     <div class="field"><div class="lbl" id="ev-sev-l">How bad (optional)</div><div class="opts" role="group" aria-labelledby="ev-sev-l">${toggles("ev-sev", M.SEVERITIES, ev.severity)}</div></div>
     ${ev.type === "bleed" ? `<div class="field"><div class="lbl" id="ev-cause-l">Cause (optional)</div><div class="opts" role="group" aria-labelledby="ev-cause-l">${toggles("ev-cause", M.BLEED_CAUSES, ev.cause)}</div></div>` : ""}
     ${ev.type === "activity" ? `<div class="field"><label for="ev-dur">How long (optional)</label><div class="amount"><input id="ev-dur" name="durationMin" type="number" min="1" max="1440" inputmode="numeric" value="${esc(ev.durationMin)}"><span>minutes</span></div></div>` : ""}
@@ -555,6 +556,9 @@ function settingsExtras() {
     <div class="row"><button class="btn-sm ${p.usePatient ? "btn-primary" : ""}" data-act="role-toggle" data-mode="patient" aria-pressed="${!!p.usePatient}">I take medicines</button>
     <button class="btn-sm ${p.useCaregiver ? "btn-primary" : ""}" data-act="role-toggle" data-mode="caregiver" aria-pressed="${!!p.useCaregiver}">I help someone</button></div>
     <div class="muted small">Healthcare professional recommended this app? ${esc(rec)}. That answer is not used for access and is not a medical recommendation.</div>
+    <strong>Body figure</strong>
+    <div class="muted small">Male or female outline when you log where something happened. Saved events keep the same places either way. People you help do not have their own figure, so this phone's choice is used for them too.</div>
+    <div class="row"><button type="button" class="btn-sm ${bodyFigure() === "male" ? "btn-primary" : ""}" data-act="body-figure" data-v="male" aria-pressed="${bodyFigure() === "male"}">Male</button><button type="button" class="btn-sm ${bodyFigure() === "female" ? "btn-primary" : ""}" data-act="body-figure" data-v="female" aria-pressed="${bodyFigure() === "female"}">Female</button></div>
     <div class="row"><button class="btn-sm" data-act="export-backup">Export backup</button><button class="btn-sm" data-act="import-backup">Import backup</button></div>
     <div class="muted small">A backup is a file you keep. Importing it on this phone does not link another person.</div></div>`;
 }
@@ -833,6 +837,7 @@ document.addEventListener("click", async e => {
       case "ev-type": readEventForm(); S.sheet.ev.type = el.dataset.type; break;
       case "ev-sev": readEventForm(); S.sheet.ev.severity = S.sheet.ev.severity === Number(el.dataset.v) ? null : Number(el.dataset.v); break;
       case "ev-cause": readEventForm(); S.sheet.ev.cause = S.sheet.ev.cause === el.dataset.v ? null : el.dataset.v; break;
+      case "body-figure": S.settings.bodyFigure = el.dataset.v === "female" ? "female" : "male"; saveSettings(); break;
       case "ev-area": {
         if (!S.sheet?.ev) break;
         readEventForm();
