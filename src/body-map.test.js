@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { BODY_AREAS, normalizeEvent } from "./model.js";
 import {
   BODY_HOTSPOTS, FIGURE, bodyAreasOnFigure, bodyAreasListOnly, hotspotName, areaAfterTap, bodyMapHtml,
-  figureDisplayWidth, hitCssPx, normalizeFigure,
+  figureDisplayWidth, hitCssPx, normalizeFigure, figureContains,
 } from "./body-map.js";
 
 const box = h => ({ l: h.cx - h.hw / 2, r: h.cx + h.hw / 2, t: h.cy - h.hh / 2, b: h.cy + h.hh / 2 });
@@ -132,7 +132,7 @@ describe("body map markup", () => {
     expect(html).toMatch(/class="body-picked on"[^>]*>Left knee</);
     expect(html).toContain("Tap where it happened");
     expect(html).toContain("<path");
-    expect(html).toContain("<ellipse");
+    expect(html).not.toContain("<ellipse");
     expect(html).not.toContain("face-deco");
     expect(html).not.toContain(">Stomach<");
     expect(bodyMapHtml("stomach")).toContain(">Stomach<");
@@ -170,6 +170,14 @@ describe("body map markup", () => {
     expect(normalizeFigure("female")).toBe("female");
     expect(normalizeFigure("nope")).toBe("male");
     expect(normalizeFigure(undefined)).toBe("male");
+  });
+
+  it("keeps every hotspot inside both outlines", () => {
+    for (const figure of ["male", "female"]) {
+      for (const h of BODY_HOTSPOTS) {
+        expect(figureContains(figure, h.cx, h.cy), figure + " " + h.area + " " + (h.side || "")).toBe(true);
+      }
+    }
   });
 
   it("keeps every hit at least 44px on a phone", () => {

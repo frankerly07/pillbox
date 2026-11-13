@@ -4,21 +4,22 @@ import { BODY_AREAS, esc } from "./model.js";
  * Front-facing body diagram for the log-event sheet.
  *
  * The figure faces the viewer, so the patient's left is on the viewer's right.
- * Male and female outlines differ in the chest, waist, and pelvis. They share
- * the same hotspot positions and BODY_AREAS keys, so a saved event names the
- * same place on either figure. "Other" stays in the list only.
+ * Male and female outlines differ in the shoulders, chest, waist, and pelvis.
+ * They share the same hotspot positions and BODY_AREAS keys, so a saved event
+ * names the same place on either figure. "Other" stays in the list only.
  *
- * Hit boxes tile the body: they meet at the edges and do not overlap, so a tap
- * cannot fall through a gap or be swallowed by a neighbor. The neck selects
- * Head. The forearm is part of the wrist target, and the shin is part of the
- * calf, so those stretches are tappable without new stored ids. Chest is its
- * own place. Upper and lower abdomen are one Stomach target.
+ * The arms are separate shapes. A gap runs from the armpit to the hand, and
+ * the hands hang beside the thighs. Hit boxes cover the head, face, neck,
+ * chest, abdomen, and each limb without overlapping, so a tap cannot fall
+ * through a gap or be swallowed by a neighbor. The neck selects Head. The
+ * forearm is part of the wrist target, and the shin is part of the calf.
  *
  * Decorative layers (the outline, side labels, muscle tints, chip text) do not
  * receive taps. Each hotspot is a button of at least 44px on a phone.
+ * The drawing is about 7.5 heads tall, with a jaw rather than a circle.
  */
 
-const VB_W = 280;
+const VB_W = 300;
 const MID = VB_W / 2;
 const TAP = 44;
 
@@ -35,36 +36,34 @@ function sided(part, cy, xRight, shape, hw = TAP, hh = TAP, tilt = 0) {
   ];
 }
 
-// Head, then the neck (also Head) with Nose and Mouth beside it, under the jaw.
-const head = spot("head", null, MID, 44, 60, 52, "region");
-const neck = spot("head", null, MID, 96, TAP, TAP, "region");
-const nose = spot("nose", null, 94, 96, TAP, TAP, "chip", "Nose");
-const mouth = spot("mouth", null, VB_W - 94, 96, TAP, TAP, "chip", "Mouth");
+// Cranium only, so Nose and Mouth can sit on the lower face without covering it.
+const head = spot("head", null, MID, 48, 66, 60, "region");
+const nose = spot("nose", null, 128, 100, TAP, TAP, "chip", "Nose");
+const mouth = spot("mouth", null, VB_W - 128, 100, TAP, TAP, "chip", "Mouth");
+const neck = spot("head", null, MID, 146, 50, TAP, "region");
 
-// Limbs are stacked bands that touch, so the arm and leg have no dead space.
+// Arms hang free of the torso. Hands are beside the thighs, not fused to the hip.
 const arms = [
-  ...sided("Shoulder", 140, 74, "joint", 48, TAP),
-  ...sided("muscleArm", 196, 68, "zone", 46, 68, 14),
-  ...sided("Elbow", 252, 62, "joint"),
-  ...sided("Wrist", 308, 58, "joint", TAP, 68),
-  ...sided("Hand", 364, 54, "joint", 48, TAP),
+  ...sided("Shoulder", 192, 66, "joint", 48, 48),
+  ...sided("muscleArm", 254, 56, "zone", 46, 76, 10),
+  ...sided("Elbow", 314, 50, "joint"),
+  ...sided("Wrist", 372, 48, "joint", TAP, 72),
+  ...sided("Hand", 430, 52, "joint", 48, TAP),
 ];
 const legs = [
-  ...sided("Hip", 318, 114, "joint", 52, 52),
-  ...sided("muscleThigh", 382, 112, "zone", 52, 76, 2),
-  ...sided("Knee", 442, 110, "joint"),
-  ...sided("muscleCalf", 498, 108, "zone", 46, 68, 1),
-  ...sided("Ankle", 554, 106, "joint"),
-  ...sided("Foot", 598, 100, "joint", 56, TAP),
+  ...sided("Hip", 434, 118, "joint", 64, 56),
+  ...sided("muscleThigh", 506, 116, "zone", 52, 88, 2),
+  ...sided("Knee", 572, 114, "joint"),
+  ...sided("muscleCalf", 634, 112, "zone", 48, 80, 1),
+  ...sided("Ankle", 696, 110, "joint"),
+  ...sided("Foot", 742, 102, "joint", 60, 48),
 ];
-for (const h of arms) if (h.area.endsWith("Wrist")) h.dot = "end";
 const foot = legs.find(h => h.area === "rightFoot");
 const shoulder = arms.find(h => h.area === "rightShoulder");
-// Chest is the upper torso. Stomach covers the abdomen down to the pelvis.
-const chest = spot("chest", null, MID, 162, 64, 80, "region", "Chest");
-const stomach = spot("stomach", null, MID, 247, 60, 90, "region", "Stomach");
+const chest = spot("chest", null, MID, 236, 100, 120, "region", "Chest");
+const stomach = spot("stomach", null, MID, 351, 80, 110, "region", "Stomach");
 
-export const FIGURE = { w: VB_W, h: Math.ceil(foot.cy + foot.hh / 2 + 16), midX: MID };
+export const FIGURE = { w: VB_W, h: Math.ceil(foot.cy + foot.hh / 2 + 14), midX: MID };
 export const BODY_FIGURES = ["male", "female"];
 
 /** "female" or "male". Anything else, including a missing value, is male. */
@@ -73,7 +72,7 @@ export function normalizeFigure(figure) {
 }
 
 /** Reading order: top to bottom, then the viewer's left to right. */
-export const BODY_HOTSPOTS = [head, neck, nose, mouth, ...arms, chest, stomach, ...legs]
+export const BODY_HOTSPOTS = [head, nose, mouth, neck, ...arms, chest, stomach, ...legs]
   .sort((a, b) => a.cy - b.cy || a.cx - b.cx);
 
 /** Area ids a tap can set, in first-seen order. */
@@ -123,46 +122,22 @@ export function areaAfterTap(current, hit) {
 
 function n(v) { return Math.round(v * 10) / 10; }
 
-// Points down the patient's right side and back up to the groin.
-// Kept close to the hit boxes so every part of the stroke can be tapped.
-// Male: broader shoulders, flatter chest, narrower pelvis.
-// Female: narrower shoulders, a chest curve, a smaller waist, a wider pelvis.
-const MALE_POINTS = [
-  [128, 74], [124, 104], [112, 124], [90, 136], [68, 150], [54, 180],
-  [48, 230], [46, 290], [48, 340], [60, 358], [78, 352], [88, 310],
-  [98, 250], [108, 190], [112, 168], [114, 200], [116, 248], [108, 295],
-  [96, 330], [90, 385], [88, 445], [92, 505], [98, 555], [88, 582],
-  [110, 604], [126, 588], [118, 545], [112, 475], [116, 405], [124, 352],
-  [134, 334], [140, 328],
-];
-const FEMALE_POINTS = [
-  [130, 74], [126, 104], [118, 122], [100, 134], [80, 148], [64, 176],
-  [56, 225], [52, 285], [54, 338], [66, 356], [82, 350], [92, 308],
-  [102, 250], [106, 200], [104, 184], [110, 215], [120, 250], [112, 290],
-  [96, 328], [86, 380], [84, 440], [88, 500], [96, 552], [86, 580],
-  [110, 602], [126, 586], [118, 540], [110, 465], [112, 395], [122, 350],
-  [134, 338], [140, 334],
-];
-
-function smoothHalf(points) {
+function smoothClosed(points) {
+  const count = points.length;
   const segs = [];
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[Math.max(i - 1, 0)];
+  for (let i = 0; i < count; i++) {
+    const p0 = points[(i - 1 + count) % count];
     const p1 = points[i];
-    const p2 = points[i + 1];
-    const p3 = points[Math.min(i + 2, points.length - 1)];
+    const p2 = points[(i + 1) % count];
+    const p3 = points[(i + 2) % count];
     segs.push([
       [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6],
       [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6],
       p2,
     ]);
   }
-  return segs;
+  return { start: points[0], segs };
 }
-
-const MALE_HALF = smoothHalf(MALE_POINTS);
-const FEMALE_HALF = smoothHalf(FEMALE_POINTS);
-const NECK = MALE_POINTS[0];
 
 function mirrorHalf(segs, start) {
   const out = [];
@@ -183,11 +158,129 @@ function cubics(segs) {
   return segs.map(([c1, c2, p]) => `C ${n(c1[0])} ${n(c1[1])}, ${n(c2[0])} ${n(c2[1])}, ${n(p[0])} ${n(p[1])}`).join(" ");
 }
 
+function pathFrom(start, segs) {
+  return `M ${n(start[0])} ${n(start[1])} ${cubics(segs)} Z`;
+}
+
+function openSegs(points) {
+  const open = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(i - 1, 0)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(i + 2, points.length - 1)];
+    open.push([
+      [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6],
+      [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6],
+      p2,
+    ]);
+  }
+  return open;
+}
+
+function halfPath(points) {
+  return `<path d="${pathFrom(points[0], openSegs(points).concat(mirrorHalf(openSegs(points), points[0])))}"/>`;
+}
+
+// Patient's right arm, closed. The deltoid overlaps the shoulder; below the
+// armpit the inner edge stays clear of the torso, and the hand ends at the thigh.
+const RIGHT_ARM = [
+  [98, 176], [78, 164], [58, 172], [46, 192],
+  [40, 230], [36, 290], [34, 350], [36, 400],
+  [42, 424], [58, 438], [74, 428],
+  [78, 400], [80, 340], [84, 280], [90, 220], [98, 188],
+];
+
+// Torso and legs. The arm is not part of this outline.
+const MALE_BODY = [
+  [132, 78], [126, 112], [122, 148], [110, 168], [104, 196],
+  [110, 230], [114, 280], [116, 330], [106, 370], [98, 410],
+  [94, 470], [96, 530], [102, 575], [98, 640], [104, 690],
+  [96, 712], [78, 732], [108, 748], [130, 734],
+  [120, 690], [116, 630], [118, 560], [122, 490], [128, 430],
+  [136, 390], [140, 372],
+];
+const FEMALE_BODY = [
+  [134, 78], [128, 112], [124, 146], [114, 164], [108, 190],
+  [100, 214], [108, 245], [122, 285], [116, 325], [98, 365],
+  [84, 415], [82, 480], [86, 545], [92, 600], [98, 655], [102, 695],
+  [92, 716], [74, 736], [108, 752], [134, 738],
+  [126, 695], [128, 630], [130, 570], [132, 490], [134, 430],
+  [130, 385], [140, 370],
+];
+
+const HEAD = [
+  [150, 18], [178, 24], [194, 46], [192, 70], [184, 90],
+  [170, 108], [150, 120], [130, 108], [116, 90], [108, 70],
+  [106, 46], [122, 24],
+];
+
+function closedPath(points) {
+  const { start, segs } = smoothClosed(points);
+  return `<path d="${pathFrom(start, segs)}"/>`;
+}
+
+function mapX(points, fn) {
+  return points.map(([x, y]) => [fn(x), y]);
+}
+
+function flatten(start, segs, steps = 8) {
+  const pts = [[start[0], start[1]]];
+  let prev = start;
+  for (const [c1, c2, p] of segs) {
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps, u = 1 - t;
+      pts.push([
+        u * u * u * prev[0] + 3 * u * u * t * c1[0] + 3 * u * t * t * c2[0] + t * t * t * p[0],
+        u * u * u * prev[1] + 3 * u * u * t * c1[1] + 3 * u * t * t * c2[1] + t * t * t * p[1],
+      ]);
+    }
+    prev = p;
+  }
+  return pts;
+}
+
+function pointIn(poly, x, y) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+function shapePolys(figure) {
+  const body = figure === "female" ? FEMALE_BODY : MALE_BODY;
+  const bodySegs = openSegs(body).concat(mirrorHalf(openSegs(body), body[0]));
+  const arm = smoothClosed(RIGHT_ARM);
+  const head = smoothClosed(HEAD);
+  const armLeftSegs = arm.segs.map(([c1, c2, p]) => [[VB_W - c1[0], c1[1]], [VB_W - c2[0], c2[1]], [VB_W - p[0], p[1]]]);
+  return [
+    flatten(body[0], bodySegs),
+    flatten(arm.start, arm.segs),
+    flatten([VB_W - arm.start[0], arm.start[1]], armLeftSegs),
+    flatten(head.start, head.segs),
+  ];
+}
+
+/** True when (x, y) lies on the head, an arm, or the torso of this figure. */
+export function figureContains(figure, x, y) {
+  return shapePolys(normalizeFigure(figure)).some(poly => pointIn(poly, x, y));
+}
+
+function detail(figure) {
+  // One open line. Male marks the pectoral border; female sits lower, under the bust.
+  const y = figure === "female" ? 236 : 218;
+  const drop = figure === "female" ? 10 : 6;
+  const d = `M 116 ${y} C 132 ${y + drop}, 168 ${y + drop}, 184 ${y}`;
+  return `<path class="detail" fill="none" stroke="var(--body-stroke)" stroke-width="1.25" d="${d}"/>`;
+}
+
 function silhouette(figure) {
-  const half = figure === "female" ? FEMALE_HALF : MALE_HALF;
-  const start = figure === "female" ? FEMALE_POINTS[0] : MALE_POINTS[0];
-  const d = `M ${n(start[0])} ${n(start[1])} ${cubics(half)} ${cubics(mirrorHalf(half, start))} Z`;
-  return `<g class="person"><path d="${d}"/><ellipse cx="${MID}" cy="42" rx="29" ry="26"/></g>`;
+  const body = figure === "female" ? FEMALE_BODY : MALE_BODY;
+  const arm = closedPath(RIGHT_ARM);
+  const armLeft = closedPath(mapX(RIGHT_ARM, x => VB_W - x));
+  return `<g class="person">${halfPath(body)}${closedPath(HEAD)}${arm}${armLeft}</g>${detail(figure)}`;
 }
 
 function hitButton(h, selected) {
@@ -202,7 +295,7 @@ function hitButton(h, selected) {
   if (h.shape === "chip") inner = `<span class="chip-label">${esc(h.text)}</span>`;
   else if (h.shape === "zone") inner = `<span class="zone-tint" style="transform:rotate(${h.tilt || 0}deg)"></span>`;
   else if (h.shape === "region" && pressed && h.text) inner = esc(h.text);
-  return `<button type="button" class="body-hit ${h.shape}${h.dot === "end" ? " dot-end" : ""}" data-act="ev-area" data-area="${h.area}" data-side="${h.side || ""}" aria-pressed="${pressed ? "true" : "false"}" aria-label="${esc(hotspotName(h))}" style="${style}">${inner}</button>`;
+  return `<button type="button" class="body-hit ${h.shape}" data-act="ev-area" data-area="${h.area}" data-side="${h.side || ""}" aria-pressed="${pressed ? "true" : "false"}" aria-label="${esc(hotspotName(h))}" style="${style}">${inner}</button>`;
 }
 
 /**
@@ -214,8 +307,8 @@ export function bodyMapHtml(selected, tone = "accent", figure = "male") {
   const toneName = tone === "bad" ? "bad" : "accent";
   const sex = normalizeFigure(figure);
   const labelY = (shoulder.cy / FIGURE.h * 100).toFixed(2);
-  const rightX = ((shoulder.cx - 46) / FIGURE.w * 100).toFixed(2);
-  const leftX = ((VB_W - (shoulder.cx - 46)) / FIGURE.w * 100).toFixed(2);
+  const rightX = ((shoulder.cx - 42) / FIGURE.w * 100).toFixed(2);
+  const leftX = ((VB_W - (shoulder.cx - 42)) / FIGURE.w * 100).toFixed(2);
   return `<div class="body-map">
     <div class="body-fig" data-tone="${toneName}" data-figure="${sex}" role="group" aria-labelledby="ev-where" style="aspect-ratio:${FIGURE.w} / ${FIGURE.h}">
       <svg viewBox="0 0 ${FIGURE.w} ${FIGURE.h}" aria-hidden="true">${silhouette(sex)}</svg>
