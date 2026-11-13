@@ -4,7 +4,7 @@ export const pad = n => String(n).padStart(2, "0");
 export const dayKey = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
 export const hm = d => pad(d.getHours()) + ":" + pad(d.getMinutes());
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
-export const COLORS = ["#17705E", "#3B5BDB", "#C2410C", "#9C36B5", "#0B7285", "#A61E4D"];
+export const COLORS = ["#2965D2", "#3B5BDB", "#C2410C", "#9C36B5", "#0B7285", "#A61E4D"];
 
 export function at(date, time) {
   const [h, m] = time.split(":").map(Number);
