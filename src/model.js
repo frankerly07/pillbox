@@ -549,12 +549,25 @@ export const EVENT_TYPES = {
 export const BODY_AREAS = {
   leftKnee: "Left knee", rightKnee: "Right knee", leftAnkle: "Left ankle", rightAnkle: "Right ankle",
   leftElbow: "Left elbow", rightElbow: "Right elbow", leftHip: "Left hip", rightHip: "Right hip",
-  leftShoulder: "Left shoulder", rightShoulder: "Right shoulder", leftWrist: "Left wrist", rightWrist: "Right wrist",
-  leftHand: "Left hand", rightHand: "Right hand", leftFoot: "Left foot", rightFoot: "Right foot",
-  head: "Head", mouth: "Mouth / gums", nose: "Nose", chest: "Chest",
+  leftShoulder: "Left shoulder", rightShoulder: "Right shoulder",
+  leftUpperArm: "Left upper arm", rightUpperArm: "Right upper arm",
+  leftForearm: "Left forearm", rightForearm: "Right forearm",
+  leftWrist: "Left wrist", rightWrist: "Right wrist",
+  leftHand: "Left hand", rightHand: "Right hand",
+  leftThigh: "Left thigh", rightThigh: "Right thigh",
+  leftCalf: "Left shin", rightCalf: "Right shin",
+  leftFoot: "Left foot", rightFoot: "Right foot",
+  head: "Head", neck: "Neck", mouth: "Mouth / gums", nose: "Nose",
+  chest: "Chest", stomach: "Stomach", lowerStomach: "Lower stomach", groin: "Groin",
+  // Kept so older logs still have a name. The neck was saved as Head, the forearm as
+  // the wrist, and the shin as Muscle (calf). The shin dots keep the leftCalf and
+  // rightCalf ids. Each limb muscle was one id for both sides. Nose, mouth, upper
+  // arm, and lower stomach stay choosable from the list; this chart has no dot for them.
   muscleThigh: "Muscle (thigh)", muscleCalf: "Muscle (calf)", muscleArm: "Muscle (arm)",
-  stomach: "Stomach", other: "Other",
+  other: "Other",
 };
+/** Ids kept so events saved before the split still have a name. They are not separate dots. */
+export const LEGACY_BODY_AREAS = ["muscleThigh", "muscleCalf", "muscleArm"];
 export const SEVERITIES = { 1: "Mild", 2: "Moderate", 3: "Severe" };
 export const BLEED_CAUSES = { spontaneous: "Spontaneous", injury: "Injury", unknown: "Unknown" };
 

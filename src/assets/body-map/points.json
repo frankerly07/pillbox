@@ -1,0 +1,339 @@
+{
+  "viewBox": "0 0 200 520",
+  "side_convention": "Anatomical: 'left' and 'right' are the figure's sides. In this front view the figure's left appears on the viewer's right.",
+  "units": "SVG viewBox coordinates",
+  "male": {
+    "file": "male.svg",
+    "points": [
+      {
+        "label": "head",
+        "side": "center",
+        "x": 100.0,
+        "y": 52.0
+      },
+      {
+        "label": "neck",
+        "side": "center",
+        "x": 100.0,
+        "y": 95.0
+      },
+      {
+        "label": "chest",
+        "side": "center",
+        "x": 100.0,
+        "y": 150.0
+      },
+      {
+        "label": "stomach",
+        "side": "center",
+        "x": 100.0,
+        "y": 214.0
+      },
+      {
+        "label": "groin",
+        "side": "center",
+        "x": 100.0,
+        "y": 268.0
+      },
+      {
+        "label": "shoulder",
+        "side": "left",
+        "x": 147.5,
+        "y": 118.0
+      },
+      {
+        "label": "shoulder",
+        "side": "right",
+        "x": 52.5,
+        "y": 118.0
+      },
+      {
+        "label": "elbow",
+        "side": "left",
+        "x": 165.0,
+        "y": 216.0
+      },
+      {
+        "label": "elbow",
+        "side": "right",
+        "x": 35.0,
+        "y": 216.0
+      },
+      {
+        "label": "forearm",
+        "side": "left",
+        "x": 168.75,
+        "y": 242.0
+      },
+      {
+        "label": "forearm",
+        "side": "right",
+        "x": 31.25,
+        "y": 242.0
+      },
+      {
+        "label": "wrist",
+        "side": "left",
+        "x": 172.5,
+        "y": 268.0
+      },
+      {
+        "label": "wrist",
+        "side": "right",
+        "x": 27.5,
+        "y": 268.0
+      },
+      {
+        "label": "hand",
+        "side": "left",
+        "x": 174.55,
+        "y": 289.9
+      },
+      {
+        "label": "hand",
+        "side": "right",
+        "x": 25.45,
+        "y": 289.9
+      },
+      {
+        "label": "hip",
+        "side": "left",
+        "x": 128.5,
+        "y": 274.0
+      },
+      {
+        "label": "hip",
+        "side": "right",
+        "x": 71.5,
+        "y": 274.0
+      },
+      {
+        "label": "thigh",
+        "side": "left",
+        "x": 122.0,
+        "y": 336.0
+      },
+      {
+        "label": "thigh",
+        "side": "right",
+        "x": 78.0,
+        "y": 336.0
+      },
+      {
+        "label": "knee",
+        "side": "left",
+        "x": 120.0,
+        "y": 386.0
+      },
+      {
+        "label": "knee",
+        "side": "right",
+        "x": 80.0,
+        "y": 386.0
+      },
+      {
+        "label": "shin",
+        "side": "left",
+        "x": 122.0,
+        "y": 434.0
+      },
+      {
+        "label": "shin",
+        "side": "right",
+        "x": 78.0,
+        "y": 434.0
+      },
+      {
+        "label": "ankle",
+        "side": "left",
+        "x": 119.0,
+        "y": 476.0
+      },
+      {
+        "label": "ankle",
+        "side": "right",
+        "x": 81.0,
+        "y": 476.0
+      },
+      {
+        "label": "foot",
+        "side": "left",
+        "x": 121.0,
+        "y": 494.0
+      },
+      {
+        "label": "foot",
+        "side": "right",
+        "x": 79.0,
+        "y": 494.0
+      }
+    ]
+  },
+  "female": {
+    "file": "female.svg",
+    "points": [
+      {
+        "label": "head",
+        "side": "center",
+        "x": 100.0,
+        "y": 52.0
+      },
+      {
+        "label": "neck",
+        "side": "center",
+        "x": 100.0,
+        "y": 96.0
+      },
+      {
+        "label": "chest",
+        "side": "center",
+        "x": 100.0,
+        "y": 158.0
+      },
+      {
+        "label": "stomach",
+        "side": "center",
+        "x": 100.0,
+        "y": 216.0
+      },
+      {
+        "label": "groin",
+        "side": "center",
+        "x": 100.0,
+        "y": 268.0
+      },
+      {
+        "label": "shoulder",
+        "side": "left",
+        "x": 140.0,
+        "y": 122.0
+      },
+      {
+        "label": "shoulder",
+        "side": "right",
+        "x": 60.0,
+        "y": 122.0
+      },
+      {
+        "label": "elbow",
+        "side": "left",
+        "x": 165.0,
+        "y": 216.0
+      },
+      {
+        "label": "elbow",
+        "side": "right",
+        "x": 35.0,
+        "y": 216.0
+      },
+      {
+        "label": "forearm",
+        "side": "left",
+        "x": 169.5,
+        "y": 242.0
+      },
+      {
+        "label": "forearm",
+        "side": "right",
+        "x": 30.5,
+        "y": 242.0
+      },
+      {
+        "label": "wrist",
+        "side": "left",
+        "x": 174.0,
+        "y": 268.0
+      },
+      {
+        "label": "wrist",
+        "side": "right",
+        "x": 26.0,
+        "y": 268.0
+      },
+      {
+        "label": "hand",
+        "side": "left",
+        "x": 176.73,
+        "y": 289.83
+      },
+      {
+        "label": "hand",
+        "side": "right",
+        "x": 23.27,
+        "y": 289.83
+      },
+      {
+        "label": "hip",
+        "side": "left",
+        "x": 131.5,
+        "y": 278.0
+      },
+      {
+        "label": "hip",
+        "side": "right",
+        "x": 68.5,
+        "y": 278.0
+      },
+      {
+        "label": "thigh",
+        "side": "left",
+        "x": 123.8,
+        "y": 336.0
+      },
+      {
+        "label": "thigh",
+        "side": "right",
+        "x": 76.2,
+        "y": 336.0
+      },
+      {
+        "label": "knee",
+        "side": "left",
+        "x": 121.0,
+        "y": 386.0
+      },
+      {
+        "label": "knee",
+        "side": "right",
+        "x": 79.0,
+        "y": 386.0
+      },
+      {
+        "label": "shin",
+        "side": "left",
+        "x": 121.8,
+        "y": 434.0
+      },
+      {
+        "label": "shin",
+        "side": "right",
+        "x": 78.2,
+        "y": 434.0
+      },
+      {
+        "label": "ankle",
+        "side": "left",
+        "x": 118.2,
+        "y": 476.0
+      },
+      {
+        "label": "ankle",
+        "side": "right",
+        "x": 81.8,
+        "y": 476.0
+      },
+      {
+        "label": "foot",
+        "side": "left",
+        "x": 119.5,
+        "y": 494.0
+      },
+      {
+        "label": "foot",
+        "side": "right",
+        "x": 80.5,
+        "y": 494.0
+      }
+    ]
+  }
+}

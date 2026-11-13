@@ -519,6 +519,13 @@ describe("event constants", () => {
   it("has body areas, severities and bleed causes", () => {
     expect(BODY_AREAS.leftKnee).toBe("Left knee");
     expect(BODY_AREAS.mouth).toBe("Mouth / gums");
+    expect(BODY_AREAS.neck).toBe("Neck");
+    expect(BODY_AREAS.stomach).toBe("Stomach");
+    expect(BODY_AREAS.lowerStomach).toBe("Lower stomach");
+    expect(BODY_AREAS.leftForearm).toBe("Left forearm");
+    expect(BODY_AREAS.leftCalf).toBe("Left shin");
+    expect(BODY_AREAS.muscleArm).toBe("Muscle (arm)");
+    expect(BODY_AREAS.muscleCalf).toBe("Muscle (calf)");
     expect(BODY_AREAS.other).toBe("Other");
     expect(SEVERITIES).toEqual({ 1: "Mild", 2: "Moderate", 3: "Severe" });
     expect(Object.keys(BLEED_CAUSES)).toEqual(["spontaneous", "injury", "unknown"]);
