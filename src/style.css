@@ -238,3 +238,13 @@ textarea{resize:vertical}
 .body-picked{text-align:center;font-weight:800;min-height:1.4em;font-family:var(--f-display)}
 .body-picked.on{color:var(--accent-text)}
 .body-fig[data-tone="bad"] ~ .body-picked.on{color:var(--bad)}
+/* medicines list: row with a shots/doses counter beside it */
+.med-row{display:flex;align-items:center;gap:8px;border-top:1px solid var(--line);padding-right:12px}
+.med-row:first-child{border-top:0}
+.med-row .item-btn{flex:1;min-width:0;border-top:0}
+.count-btn{flex:none;white-space:nowrap;background:var(--accent-soft);border-color:var(--accent);color:var(--accent-text)}
+/* shot / dose history */
+.history-total .big{font-family:var(--f-mono);font-size:2.4rem;font-weight:500;line-height:1}
+.history-day h3{color:var(--muted);font-size:.9rem;text-transform:uppercase;letter-spacing:.06em;margin:4px 4px 2px}
+.history-amt{font-weight:700;text-align:right;display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.empty-state{text-align:center;display:flex;flex-direction:column;gap:4px}

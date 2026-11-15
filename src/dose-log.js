@@ -1,7 +1,7 @@
 // One administration change and the inventory delta that goes with it.
 // Pure: same command + same state => same result. Callers persist only when code is "applied".
 // `actor.uiRole` is stored as a label ("patient" / "caregiver"). It is not an access check.
-import { normalizeMed, supplyPerDose, supplyTaken, dayKey, hm, CONTAINERS } from "./model.js";
+import { normalizeMed, supplyPerDose, supplyTaken, dayKey, hm, CONTAINERS, administrationLabel } from "./model.js";
 
 const round6 = n => Math.round(Number(n) * 1e6) / 1e6;
 const MAX_OPS = 5000;
@@ -220,4 +220,36 @@ export function commitAdministration(patient, cmd = {}, now = Date.now()) {
   const delta = moveStock(prevUsed, "undo", "skipped", key);
   addAudit("skip", key, { previousStatus: existing?.status || "open" });
   return done("applied", "Scheduled dose marked skipped.", key, delta);
+}
+
+// ---- shot / dose history ----
+/** Injections are "shots"; every other type is counted as "doses". */
+export function historyNoun(med) {
+  const shot = normalizeMed(med || {}).type === "injection";
+  return shot ? { one: "shot", many: "shots", title: "Shot history" } : { one: "dose", many: "doses", title: "Dose history" };
+}
+/** "1 shot", "3 doses". */
+export const historyCount = (med, n) => { const w = historyNoun(med); return n + " " + (n === 1 ? w.one : w.many); };
+/**
+ * Every treatment actually taken for one medicine, from the dose log: scheduled and additional logs with status "taken".
+ * Skipped doses don't count; removed logs are already gone from the log. Edited logs show the corrected amount.
+ * Grouped by the local day it was taken, newest day first and newest shot first within a day.
+ * @returns {{ total:number, days: Array<{ day:string, entries: Array<{ key:string, at:string, time:string, amount:string, extra:boolean, edited:boolean }> }> }}
+ */
+export function doseHistory(med, doses) {
+  if (!med) return { total: 0, days: [] };
+  const entries = [];
+  for (const [key, d] of Object.entries(doses || {})) {
+    if (!d || d.medId !== med.id || d.status !== "taken" || !d.at) continue;
+    const when = new Date(d.at);
+    if (isNaN(when.getTime())) continue;
+    entries.push({ key, at: when.toISOString(), ms: when.getTime(), day: dayKey(when), time: hm(when), amount: administrationLabel(d, med), extra: !!d.extra, edited: !!d.editedAt });
+  }
+  entries.sort((a, b) => b.ms - a.ms || (a.key < b.key ? 1 : -1));
+  const days = [];
+  for (const { ms, day, ...e } of entries) {
+    if (!days.length || days[days.length - 1].day !== day) days.push({ day, entries: [] });
+    days[days.length - 1].entries.push(e);
+  }
+  return { total: entries.length, days };
 }
