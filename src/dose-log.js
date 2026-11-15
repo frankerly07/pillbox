@@ -2,6 +2,7 @@
 // Pure: same command + same state => same result. Callers persist only when code is "applied".
 // `actor.uiRole` is stored as a label ("patient" / "caregiver"). It is not an access check.
 import { normalizeMed, supplyPerDose, supplyTaken, dayKey, hm, CONTAINERS, administrationLabel } from "./model.js";
+import { t } from "./i18n.js";
 
 const round6 = n => Math.round(Number(n) * 1e6) / 1e6;
 const MAX_OPS = 5000;
@@ -226,7 +227,8 @@ export function commitAdministration(patient, cmd = {}, now = Date.now()) {
 /** Injections are "shots"; every other type is counted as "doses". */
 export function historyNoun(med) {
   const shot = normalizeMed(med || {}).type === "injection";
-  return shot ? { one: "shot", many: "shots", title: "Shot history" } : { one: "dose", many: "doses", title: "Dose history" };
+  const k = shot ? "shot" : "dose";
+  return { shot, one: t("hist." + k + "_one"), many: t("hist." + k + "_other"), title: t("hist." + k + "Title") };
 }
 /** "1 shot", "3 doses". */
 export const historyCount = (med, n) => { const w = historyNoun(med); return n + " " + (n === 1 ? w.one : w.many); };

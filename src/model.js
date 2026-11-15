@@ -1,4 +1,6 @@
 // Pure dose logic shared by the patient and caregiver apps. No storage, no DOM.
+// Words come from i18n.js (English until the app picks a language).
+import { t, tn, fmtHM, weekdayShort } from "./i18n.js";
 
 export const pad = n => String(n).padStart(2, "0");
 export const dayKey = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
@@ -18,12 +20,12 @@ export function parseDay(key) {
 }
 export function fmtTime(t) {
   const [h, m] = t.split(":").map(Number);
-  return ((h % 12) || 12) + ":" + pad(m) + " " + (h < 12 ? "AM" : "PM");
+  return fmtHM(h, m);
 }
 export const fmtClock = iso => fmtTime(hm(new Date(iso)));
 export function rel(ms) {
   const m = Math.round(Math.abs(ms) / 60000);
-  if (m < 1) return "now";
+  if (m < 1) return t("rel.now");
   if (m < 60) return m + " min";
   const h = Math.floor(m / 60), r = m % 60;
   return h + " h" + (r ? " " + r + " min" : "");
@@ -42,7 +44,10 @@ export const TYPES = {
 };
 const UNIT_NAMES = { pills: ["pill", "pills"], mL: ["mL", "mL"], units: ["unit", "units"], mg: ["mg", "mg"], doses: ["dose", "doses"], vials: ["vial", "vials"], pens: ["pen", "pens"], bags: ["bag", "bags"], bottles: ["bottle", "bottles"] };
 export const CONTAINERS = ["vials", "pens", "bags", "bottles"];
-export const unitName = (unit, n = 2) => (UNIT_NAMES[unit] || [unit, unit])[Math.abs(n) === 1 ? 0 : 1];
+export const unitName = (unit, n = 2) => UNIT_NAMES[unit] ? t("unit." + unit + (Math.abs(n) === 1 ? "_one" : "_other")) : unit;
+/** Type names in the current language ("Pill / tablet", "Pastilla / tableta"). */
+export const typeLabel = type => t("type." + (TYPES[type] ? type : "other"));
+export const typeShort = type => t("typeShort." + (TYPES[type] ? type : "other"));
 export const fmtNum = n => String(Math.round(n * 100) / 100);
 export const qty = (n, unit) => fmtNum(n) + " " + unitName(unit, Math.round(n * 100) / 100);
 
@@ -170,22 +175,21 @@ export function scheduledOn(med, date, doses) {
   return out.sort((x, y) => x.when - y.when);
 }
 
-const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const ordinal = n => n + ((n % 100 >= 11 && n % 100 <= 13) ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
 export function scheduleLabel(med) {
   const s = scheduleOf(med), n = Math.max(1, Math.floor(Number(s.n) || 1));
   switch (s.kind) {
-    case "prn": return "as needed";
+    case "prn": return t("sched.prn");
     case "weekdays": {
       const d = [...new Set((s.days || []).map(Number))].sort();
-      if (d.length === 7) return "daily";
-      if (d.join() === "1,2,3,4,5") return "weekdays";
-      return d.map(x => WD[x]).join(", ") || "no days chosen";
+      if (d.length === 7) return t("sched.daily");
+      if (d.join() === "1,2,3,4,5") return t("sched.weekdays");
+      return d.map(weekdayShort).join(", ") || t("sched.noDays");
     }
-    case "everyNDays": return n === 1 ? "daily" : "every " + n + " days";
-    case "everyNWeeks": return n === 1 ? "weekly" : "every " + n + " weeks";
-    case "monthly": return "monthly on the " + ordinal(Math.floor(Number(s.dayOfMonth)) || (med.start ? parseDay(med.start).getDate() : 1));
-    default: return "daily";
+    case "everyNDays": return n === 1 ? t("sched.daily") : t("sched.everyNDays", { n });
+    case "everyNWeeks": return n === 1 ? t("sched.weekly") : t("sched.everyNWeeks", { n });
+    case "monthly": { const day = Math.floor(Number(s.dayOfMonth)) || (med.start ? parseDay(med.start).getDate() : 1); return t("sched.monthly", { ord: ordinal(day), n: day }); }
+    default: return t("sched.daily");
   }
 }
 // "40 units", "2 pills"; old pill medicines keep their own wording ("1 softgel") while it still matches.
@@ -196,7 +200,7 @@ export function doseLabel(med) {
 }
 export const typeIcon = med => TYPES[normalizeMed(med).type].icon;
 // "Injection · 40 units · every 2 weeks"
-export const medSummary = med => [TYPES[normalizeMed(med).type].short, doseLabel(med), scheduleLabel(med)].join(" · ");
+export const medSummary = med => [typeShort(normalizeMed(med).type), doseLabel(med), scheduleLabel(med)].join(" · ");
 
 /**
  * Scheduled doses for one date.
@@ -303,7 +307,7 @@ export function supplyTaken(log, med) {
 export function fmtLogged(log, day) {
   if (!log || !log.at) return "";
   const d = new Date(log.at);
-  return (log.status === "skipped" ? "Skipped " : "Taken ") + (day && dayKey(d) !== day ? WD[d.getDay()] + " " : "") + fmtTime(hm(d));
+  return t(log.status === "skipped" ? "logged.skipped" : "logged.taken", { when: (day && dayKey(d) !== day ? weekdayShort(d.getDay()) + " " : "") + fmtTime(hm(d)) });
 }
 /** What was actually logged, if the record saved a snapshot; otherwise the medicine's current dose. */
 export function administrationLabel(log, med) {
@@ -311,7 +315,7 @@ export function administrationLabel(log, med) {
   return doseLabel(med);
 }
 /** "Scheduled 8:00 AM · Taken 8:14 AM", or "Additional treatment · Taken …" for an unscheduled log. */
-export const fmtDoseTimes = d => (d.log && d.log.extra ? "Additional treatment" : "Scheduled " + fmtTime(d.time)) + (d.log && d.log.at ? " · " + fmtLogged(d.log, d.day) : "");
+export const fmtDoseTimes = d => (d.log && d.log.extra ? t("dose.additionalTreatment") : t("dose.scheduledAt", { time: fmtTime(d.time) })) + (d.log && d.log.at ? " · " + fmtLogged(d.log, d.day) : "");
 /** Where the "Taken earlier?" picker starts: now for today's doses, the scheduled time for other days. */
 export const defaultLogTime = (day, scheduled, now = Date.now()) => day === dayKey(new Date(now)) ? hm(new Date(now)) : scheduled;
 /**
@@ -448,13 +452,15 @@ export const BADGES = [
   { days: 14, emoji: "🏅", label: "2 weeks on time" },
   { days: 30, emoji: "🏆", label: "1 month on time" },
 ];
+/** A badge's name in the current language. */
+export const badgeLabel = b => t("badge." + b.days);
 export const badgesFor = streak => BADGES.filter(b => streak >= b.days);
 export function encouragement(streak, rate7Pct) {
   const next = BADGES.find(b => streak < b.days);
-  if (!next) return "A whole month of on-time doses. Amazing work!";
-  const togo = next.days - streak, until = togo + (togo === 1 ? " more day" : " more days") + " to " + next.emoji + " " + next.label + ".";
-  if (streak === 0) return rate7Pct != null && rate7Pct >= 80 ? "You're doing well this week. " + until : "Every on-time dose counts. " + until;
-  return "Great job, " + streak + (streak === 1 ? " day" : " days") + " in a row! " + until;
+  if (!next) return t("cheer.month");
+  const until = tn("cheer.until", next.days - streak, { badge: next.emoji + " " + badgeLabel(next) });
+  if (streak === 0) return (rate7Pct != null && rate7Pct >= 80 ? t("cheer.goodWeek") : t("cheer.everyDose")) + " " + until;
+  return tn("cheer.streak", streak) + " " + until;
 }
 /** Everything the Today progress card shows. */
 export function adherenceProgress(meds, doses, now = Date.now()) {
@@ -520,6 +526,8 @@ export function calendarStarts(med, doses = {}, now = Date.now()) {
   }
   return [];
 }
+/** "Take 2 pills (daily)." plus the medicine's notes; used for calendar events. */
+export const calendarDescription = med => t("cal.take", { dose: doseLabel(med), sched: scheduleLabel(med) }) + (med.notes ? " " + med.notes : "");
 export const calendarTitle = med => typeIcon(med) + " " + [med.name, med.strength].filter(Boolean).join(" ") + " (" + doseLabel(med) + ")";
 /** An .ics file with one repeating event per time of day. "" for as-needed medicines. */
 export function medToIcs(med, doses = {}, now = Date.now()) {
@@ -531,7 +539,7 @@ export function medToIcs(med, doses = {}, now = Date.now()) {
     lines.push("BEGIN:VEVENT", "UID:" + med.id + "-" + time.replace(":", "") + "@pillbox", "DTSTAMP:" + icsUtc(new Date(now)),
       "DTSTART:" + icsLocal(start), "DTEND:" + icsLocal(end), "RRULE:" + rule,
       "SUMMARY:" + icsText(calendarTitle(med)),
-      "DESCRIPTION:" + icsText("Take " + doseLabel(med) + " (" + scheduleLabel(med) + ")." + (med.notes ? " " + med.notes : "")),
+      "DESCRIPTION:" + icsText(calendarDescription(med)),
       "END:VEVENT");
   }
   lines.push("END:VCALENDAR");
@@ -567,6 +575,11 @@ export const BODY_AREAS = {
   other: "Other",
 };
 /** Ids kept so events saved before the split still have a name. They are not separate dots. */
+/** Names in the current language. Unknown ids give "". */
+export const areaName = k => (BODY_AREAS[k] ? t("area." + k) : "");
+export const eventTypeLabel = k => t("event." + (EVENT_TYPES[k] ? k : "other"));
+export const severityLabel = k => (SEVERITIES[k] ? t("sev." + k) : "");
+export const causeLabel = k => (BLEED_CAUSES[k] ? t("cause." + k) : "");
 export const LEGACY_BODY_AREAS = ["muscleThigh", "muscleCalf", "muscleArm"];
 export const SEVERITIES = { 1: "Mild", 2: "Moderate", 3: "Severe" };
 export const BLEED_CAUSES = { spontaneous: "Spontaneous", injury: "Injury", unknown: "Unknown" };
@@ -602,15 +615,14 @@ export function eventsOn(date, events) {
 }
 /** "Bleed · Left knee · Moderate · Injury", "Activity · 45 min · Mild". */
 export function eventLabel(e) {
-  const t = EVENT_TYPES[e.type] || EVENT_TYPES.other;
-  return [t.label, BODY_AREAS[e.area], e.durationMin > 0 ? rel(e.durationMin * 60000) : null, SEVERITIES[e.severity],
-    e.type === "bleed" ? BLEED_CAUSES[e.cause] : null].filter(Boolean).join(" · ");
+  return [eventTypeLabel(e.type), areaName(e.area), e.durationMin > 0 ? rel(e.durationMin * 60000) : null, severityLabel(e.severity),
+    e.type === "bleed" ? causeLabel(e.cause) : null].filter(Boolean).join(" · ");
 }
 /** How a taken dose reads in the "Treated with" picker: "Factor VIII 2000 IU · Tue 8:14 AM" (weekday when not on `now`'s day). */
 export function doseLinkLabel(dose, meds, now = Date.now()) {
   const med = (meds || []).find(m => m.id === dose.medId), d = new Date(dose.at);
-  const name = med ? [med.name, med.strength].filter(Boolean).join(" ") : "Medicine";
-  return name + " · " + (dayKey(d) !== dayKey(new Date(now)) ? WD[d.getDay()] + " " : "") + fmtTime(hm(d));
+  const name = med ? [med.name, med.strength].filter(Boolean).join(" ") : t("common.medicine");
+  return name + " · " + (dayKey(d) !== dayKey(new Date(now)) ? weekdayShort(d.getDay()) + " " : "") + fmtTime(hm(d));
 }
 /** Doses taken in the last `hours` hours (up to now), newest first, for linking an event to its treatment: [{ key, label, at }]. */
 export function recentDosesForLink(meds, doses, now = Date.now(), hours = 48) {

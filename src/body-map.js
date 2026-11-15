@@ -1,4 +1,5 @@
-import { BODY_AREAS, esc } from "./model.js";
+import { BODY_AREAS, esc, areaName } from "./model.js";
+import { t } from "./i18n.js";
 import chart from "./assets/body-map/points.json";
 import maleSvg from "./assets/body-map/male.svg?raw";
 import femaleSvg from "./assets/body-map/female.svg?raw";
@@ -35,6 +36,9 @@ const SHORT = {
   hand: "Hand", hip: "Hip", thigh: "Thigh", knee: "Knee", shin: "Shin",
   ankle: "Ankle", foot: "Foot",
 };
+
+/** Short dot label in the current language. */
+export const shortName = label => (SHORT[label] ? t("bodyShort." + label) : "");
 
 const AREA_ID = {
   head: "head", neck: "neck", chest: "chest", stomach: "stomach", groin: "groin",
@@ -91,7 +95,7 @@ function hotspot(point) {
     cy: point.y,
     hw: HIT,
     hh: HIT,
-    text: SHORT[point.label],
+    text: shortName(point.label),
     // Limb names sit outside the arm or leg. Chest sits above its dot so it
     // clears the pectoral line. Groin sits above its dot so it clears the hips.
     anchor: point.label === "groin" || point.label === "chest" ? "above" : point.side === "right" ? "start" : "end",
@@ -138,7 +142,7 @@ export function selectionTargets(area) {
 
 /** Spoken name for one hotspot. */
 export function hotspotName(h) {
-  return BODY_AREAS[h.area] || "";
+  return areaName(h.area);
 }
 
 const LABEL_CHAR = 6.4;
@@ -245,8 +249,8 @@ export function bodyMapHtml(selected, tone = "accent", figure = "male") {
       <svg viewBox="${FIGURE.minX} 0 ${FIGURE.w} ${FIGURE.h}" aria-hidden="true">${silhouette(sex)}</svg>
       ${spots.map(h => hitButton(h, targets)).join("")}
     </div>
-    <p class="body-picked${area ? " on" : ""}" aria-live="polite">${area ? "Selected: " + esc(BODY_AREAS[area]) : ""}</p>
-    <p class="muted small body-hint" id="ev-body-hint">Tap where it happened</p>
-    <p class="muted small body-hint">Left and Right are this person's own sides.</p>
+    <p class="body-picked${area ? " on" : ""}" aria-live="polite">${area ? esc(t("body.selected", { area: areaName(area) })) : ""}</p>
+    <p class="muted small body-hint" id="ev-body-hint">${t("body.tapHint")}</p>
+    <p class="muted small body-hint">${t("body.sidesHint")}</p>
   </div>`;
 }

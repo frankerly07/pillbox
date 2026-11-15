@@ -2,6 +2,7 @@
 // this module never claims it can see the other app. It only keeps data already in this one,
 // and builds a backup file a person can move themselves.
 import { normalizeMed, normalizeEvent } from "./model.js";
+import { t, tn } from "./i18n.js";
 
 const DROP = ["access", "caregivers", "caregiverUids", "caregiverNames", "linkCode", "linkCodeExpires", "joinCode", "apiKey", "password", "token", "email", "secret"];
 
@@ -121,12 +122,12 @@ function newId(id, taken, n) {
  */
 export function planImport(existingPatients, backup, { intoEmptyId = null, idStart = 1 } = {}) {
   if (!backup || backup.pillboxBackup !== 1 || !backup.patients || typeof backup.patients !== "object") {
-    return { ok: false, message: "That file isn't a PillAlly backup." };
+    return { ok: false, message: t("backup.notBackup") };
   }
   const patients = {};
   for (const [id, p] of Object.entries(existingPatients || {})) patients[id] = structuredClone(p);
   const entries = Object.entries(backup.patients).filter(([, p]) => p && typeof p === "object");
-  if (!entries.length) return { ok: false, message: "That backup has no records." };
+  if (!entries.length) return { ok: false, message: t("backup.empty") };
   const imported = [];
   const emptyTarget = intoEmptyId && patients[intoEmptyId] && !(patients[intoEmptyId].meds || []).length ? intoEmptyId : null;
   if (emptyTarget && entries.length === 1) {
@@ -145,7 +146,7 @@ export function planImport(existingPatients, backup, { intoEmptyId = null, idSta
       appliedOps: Array.isArray(raw.appliedOps) ? raw.appliedOps : [],
     };
     imported.push(emptyTarget);
-    return { ok: true, patients, imported, message: "Backup restored on this phone. This does not connect another phone." };
+    return { ok: true, patients, imported, message: t("backup.restored") };
   }
   let n = idStart;
   for (const [id, raw] of entries) {
@@ -166,5 +167,5 @@ export function planImport(existingPatients, backup, { intoEmptyId = null, idSta
     };
     imported.push(dest);
   }
-  return { ok: true, patients, imported, message: imported.length === 1 ? "1 record added on this phone. It is not a synced link." : imported.length + " records added on this phone. They are not synced links." };
+  return { ok: true, patients, imported, message: tn("backup.added", imported.length) };
 }
