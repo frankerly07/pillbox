@@ -2,14 +2,16 @@ import "./style.css";
 import * as M from "./model.js";
 import { makeStore, syncStatus } from "./store.js";
 import { PERMISSIONS } from "./access.js";
-import { CATALOG_NOTICE, applyCatalogChoice } from "./drug-catalog.js";
+import { applyCatalogChoice } from "./drug-catalog.js";
 import { lookupPackageCode, searchDrugNames } from "./rxnav.js";
 import * as N from "./native.js";
 import { renderSVG } from "uqr";
 import { areaAfterTap, bodyMapHtml } from "./body-map.js";
 import { doseHistory, historyNoun, historyCount } from "./dose-log.js";
+import { t, tn, getLang, initLang, readLangPref, saveLangPref, LANG_CHOICES, fmtDateL, fmtDateTimeL, capFirst, weekdayShort, weekdayLetter } from "./i18n.js";
 
 const { esc, fmtTime, fmtClock, dayKey } = M;
+initLang();
 const $app = document.getElementById("app");
 const $nav = document.getElementById("tabs");
 
@@ -18,7 +20,7 @@ const S = {
   patients: [], snaps: {}, pid: null, // pid: patient being viewed
   view: "today", sub: "today", onboardStep: "role",
   cal: { y: new Date().getFullYear(), m: new Date().getMonth(), sel: dayKey(new Date()) },
-  editing: null, sheet: null, drug: null, alert: null, ble: "Not connected", invite: null, invitePreview: null, auth: { mode: "signin", error: "" },
+  editing: null, sheet: null, drug: null, alert: null, ble: "", invite: null, invitePreview: null, auth: { mode: "signin", error: "" },
   settings: loadSettings(), perm: "default",
 };
 function loadSettings() { try { return { dueWindowMin: 60, bodyFigure: "male", ...JSON.parse(localStorage.getItem("pillbox.settings") || "{}") }; } catch (e) { return { dueWindowMin: 60, bodyFigure: "male" }; } }
@@ -63,18 +65,25 @@ function doseResultMessage(res, med) {
   const when = res?.at || res?.dose?.at;
   const nm = med ? M.normalizeMed(med) : null;
   const same = nm && res?.dose && Number(res.dose.amount) === nm.doseAmount && res.dose.unit === nm.doseUnit;
-  const what = same ? M.doseLabel(med) : (res?.dose?.amount && res?.dose?.unit ? M.qty(res.dose.amount, res.dose.unit) : (med ? M.doseLabel(med) : "treatment"));
-  return "Logged " + what + (when ? " at " + fmtClock(when) : "");
+  const what = same ? M.doseLabel(med) : (res?.dose?.amount && res?.dose?.unit ? M.qty(res.dose.amount, res.dose.unit) : (med ? M.doseLabel(med) : t("common.treatment")));
+  return when ? t("toast.loggedAt", { what, time: fmtClock(when) }) : t("toast.logged", { what });
 }
 async function commit(pid, cmd) {
   const res = await S.store.commitDose(pid, { ...cmd, actor: actor(), now: Date.now() });
   if (res.code === "already-logged") {
     const med = snap(pid).meds.find(m => m.id === cmd.medId);
-    showAlert("dup", (med?.name || "This treatment") + " is already logged" + (res.at ? " at " + fmtClock(res.at) : "") + ".");
+    const name = med?.name || t("common.thisTreatment");
+    showAlert("dup", res.at ? t("alert.alreadyLoggedAt", { name, time: fmtClock(res.at) }) : t("alert.alreadyLogged", { name }));
     return null;
   }
-  if (!res.ok && res.code !== "replay" && res.code !== "unchanged") throw new Error(res.message || "Couldn't save that.");
+  if (!res.ok && res.code !== "replay" && res.code !== "unchanged") throw new Error(commitError(res));
   return res;
+}
+// Errors from the dose log, in the current language (the log's own message is English).
+function commitError(res) {
+  const k = "commit." + res.code;
+  if (getLang() === "en" || t(k) === k) return res.message || t("err.couldntSave");
+  return t(k);
 }
 // Change the pill count. If that can't be saved, put back the dose change that went with it (revert) so the
 // count and the dose log don't drift apart, and throw an error the caller shows as a toast.
@@ -83,7 +92,7 @@ async function adjustStock(pid, medId, delta, ev, revert) {
   catch (err) {
     let undone = false;
     if (revert) undone = await revert().then(() => true, () => false);
-    throw new Error("Couldn't update the supply count" + (undone ? ", so the change was undone" : revert ? " and couldn't undo the dose change" : "") + ". " + (err.message || String(err)));
+    throw new Error(t(undone ? "err.stockUndone" : revert ? "err.stockNotUndone" : "err.stock") + " " + (err.message || String(err)));
   }
 }
 const putBack = (pid, key, was) => () => was ? S.store.setDose(pid, key, was) : S.store.clearDose(pid, key);
@@ -107,7 +116,7 @@ async function undoDose(pid, key) {
 async function logAdditional(pid, med, when = new Date(), amount, unit, force = false) {
   const last = M.lastTaken(med.id, snap(pid).doses);
   if (!force && last && Date.now() - new Date(last.at).getTime() < 2 * 3600000) {
-    S.alert = { kind: "dup", text: "You logged " + med.name + " at " + fmtClock(last.at) + ", less than 2 hours ago. Logging another treatment does not change the prescription.", force: med.id };
+    S.alert = { kind: "dup", text: t("alert.recentLog", { name: med.name, time: fmtClock(last.at) }), force: med.id };
     render(); return null;
   }
   const nm = M.normalizeMed(med);
@@ -122,13 +131,13 @@ async function logAdditional(pid, med, when = new Date(), amount, unit, force = 
 async function lidOpened(slot, source) {
   const pid = S.pid, p = snap(pid);
   const med = p.meds.find(m => Number(m.slot) === Number(slot));
-  if (!med) { toast("No medicine is set for compartment " + slot); return; }
+  if (!med) { toast(t("toast.noMedInSlot", { slot })); return; }
   const d = M.doseForLidOpen(med, p.meds, p.doses);
-  if (d) { await takeDose(pid, d, source); toast(med.name + " (" + fmtTime(d.time) + ") marked taken"); return; }
+  if (d) { await takeDose(pid, d, source); toast(t("toast.markedTaken", { name: med.name, time: fmtTime(d.time) })); return; }
   const last = M.lastTaken(med.id, p.doses);
   if (last && Date.now() - new Date(last.at).getTime() < 4 * 3600000) {
-    showAlert("dup", "You already took " + med.name + " at " + fmtClock(last.at) + ". Compartment " + slot + " was opened again.");
-    N.alertNow("Already taken", med.name + " was taken at " + fmtClock(last.at) + ".");
+    showAlert("dup", t("alert.alreadyTook", { name: med.name, time: fmtClock(last.at), slot }));
+    N.alertNow(t("notif.alreadyTakenTitle"), t("notif.alreadyTakenBody", { name: med.name, time: fmtClock(last.at) }));
     return;
   }
   await logAdditional(pid, med, new Date(), null, null, true);
@@ -137,7 +146,7 @@ function showAlert(kind, text) { S.alert = { kind, text }; render(); }
 let toastT;
 function toast(text, undo) {
   const el = document.getElementById("toast");
-  el.innerHTML = esc(text) + (undo ? ` <button class="btn-sm btn-quiet toast-undo" data-act="undo" data-key="${undo}">Undo</button> <button class="btn-sm btn-quiet toast-undo" data-act="edit-time" data-key="${undo}">Edit log</button>` : "");
+  el.innerHTML = esc(text) + (undo ? ` <button class="btn-sm btn-quiet toast-undo" data-act="undo" data-key="${undo}">${esc(t("btn.undo"))}</button> <button class="btn-sm btn-quiet toast-undo" data-act="edit-time" data-key="${undo}">${esc(t("btn.editLog"))}</button>` : "");
   el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (el.hidden = true), undo ? 6000 : 3200);
 }
 
@@ -152,7 +161,7 @@ async function syncCalendar(before, m) {
     m.addToCalendar = false; m.calendarEventIds = [];
     if (!was) return "";
     await N.removeMedFromCalendar(ids);
-    return ids.length ? "Removed from your calendar" : "Calendar off. Delete the events in your calendar app if you added the file.";
+    return ids.length ? t("cal.removed") : t("cal.offFile");
   }
   if (was && calKey(before) === calKey(m)) return "";
   if (was) await N.removeMedFromCalendar(ids);
@@ -162,37 +171,40 @@ async function syncCalendar(before, m) {
 }
 
 // ---------------- shared pieces ----------------
+const statusLabel = s => { const k = "status." + s; return t(k) !== k ? t(k) : s; };
+const unitOption = u => u === "units" ? t("unit.unitsIU") : M.unitName(u);
+const longDate = d => capFirst(fmtDateL(d, { weekday: "long", month: "long", day: "numeric" }));
 const header = (title, sub, right = "") => `<header class="top"><div style="min-width:0"><div class="eyebrow">${esc(sub)}</div><h1>${esc(title)}</h1></div>${right}</header>`;
 function alertBanner() {
   if (!S.alert) return "";
-  return `<div class="banner ${S.alert.kind}" role="alert"><div>${esc(S.alert.text)}</div><div class="row">${S.alert.force ? `<button class="btn-sm btn-danger" data-act="force" data-med="${S.alert.force}">Log this treatment</button>` : ""}<button class="btn-sm" data-act="dismiss">OK</button></div></div>`;
+  return `<div class="banner ${S.alert.kind}" role="alert"><div>${esc(S.alert.text)}</div><div class="row">${S.alert.force ? `<button class="btn-sm btn-danger" data-act="force" data-med="${S.alert.force}">${esc(t("btn.logThisTreatment"))}</button>` : ""}<button class="btn-sm" data-act="dismiss">${esc(t("btn.ok"))}</button></div></div>`;
 }
 function exampleBanner() {
   if (!S.store.example) return "";
   if (isCare()) {
     const people = (S.patients || []).some(p => p.id !== "me" && (p.example || String(p.name || "").startsWith("Example:")));
     if (!people) return "";
-    return `<div class="banner info"><div><strong>These example people are saved on this phone.</strong> They are not real and not linked to anyone.</div><button class="btn-sm" data-act="clear-examples">Start empty</button></div>`;
+    return `<div class="banner info"><div><strong>${esc(t("ex.peopleTitle"))}</strong> ${esc(t("ex.peopleBody"))}</div><button class="btn-sm" data-act="clear-examples">${esc(t("btn.startEmpty"))}</button></div>`;
   }
-  return `<div class="banner info"><div><strong>These are example medicines on this phone.</strong> Replace them with your own.</div><button class="btn-sm" data-act="clear-examples">Start empty</button></div>`;
+  return `<div class="banner info"><div><strong>${esc(t("ex.medsTitle"))}</strong> ${esc(t("ex.medsBody"))}</div><button class="btn-sm" data-act="clear-examples">${esc(t("btn.startEmpty"))}</button></div>`;
 }
 function legacyBanner() {
   if (!S.legacyCare) return "";
-  return `<div class="banner info"><div><strong>This is the separate PillAlly Care app.</strong> Its records stay here. Android cannot move them into PillAlly (com.pillbox.patient). Nothing is deleted. Export a backup and import it in PillAlly. That file is not a live link.</div></div>`;
+  return `<div class="banner info"><div><strong>${esc(t("legacy.title"))}</strong> ${esc(t("legacy.body"))}</div></div>`;
 }
 function viewSwitch() {
   const p = S.profile;
   if (!p?.usePatient || !p?.useCaregiver) return "";
-  return `<div class="seg view-switch" role="tablist" aria-label="Which view"><button type="button" role="tab" aria-selected="${!isCare()}" data-act="switch-view" data-view="patient">My medicines</button><button type="button" role="tab" aria-selected="${isCare()}" data-act="switch-view" data-view="caregiver">People I help</button></div><p class="muted small">Switching views does not share medicines or grant access.</p>`;
+  return `<div class="seg view-switch" role="tablist" aria-label="${esc(t("view.which"))}"><button type="button" role="tab" aria-selected="${!isCare()}" data-act="switch-view" data-view="patient">${esc(t("view.mine"))}</button><button type="button" role="tab" aria-selected="${isCare()}" data-act="switch-view" data-view="caregiver">${esc(t("view.help"))}</button></div><p class="muted small">${esc(t("view.note"))}</p>`;
 }
 
 function wells(pid, list) {
-  return `<div class="pack">` + list.map(d => `<button class="well ${d.status}" data-act="well" data-pid="${pid}" data-key="${d.key}" aria-label="${esc(d.med.name)}, ${esc(M.fmtDoseTimes(d))}${d.log ? "" : ", " + d.status}">
+  return `<div class="pack">` + list.map(d => `<button class="well ${d.status}" data-act="well" data-pid="${pid}" data-key="${d.key}" aria-label="${esc(d.med.name)}, ${esc(M.fmtDoseTimes(d))}${d.log ? "" : ", " + statusLabel(d.status)}">
     <span class="pill" aria-hidden="true"></span>
-    <span class="time">${d.log ? `<span class="sched">Scheduled</span> ` : ""}${fmtTime(d.time)}</span><span class="name"><span aria-hidden="true">${M.typeIcon(d.med)}</span> ${esc(d.med.name)}</span><span class="dose">${d.med.strength ? esc(d.med.strength) + " · " : ""}${esc(M.administrationLabel(d.log, d.med))}</span>
-    <span class="chip ${d.status}">${d.log ? M.fmtLogged(d.log, d.day) : d.status === "upcoming" || d.status === "due" || d.status === "missed" ? (isCare() ? d.status : "Log now") : d.status}</span>
-    ${d.log && d.log.by === "caregiver" && !isCare() ? `<span class="muted small">by ${esc(d.log.byName || "caregiver")}</span>` : ""}
-    ${d.log && d.log.by === "patient" && isCare() && d.log.source === "pillbox" ? `<span class="muted small">from pillbox</span>` : ""}</button>`).join("") + `</div>`;
+    <span class="time">${d.log ? `<span class="sched">${esc(t("dose.scheduled"))}</span> ` : ""}${fmtTime(d.time)}</span><span class="name"><span aria-hidden="true">${M.typeIcon(d.med)}</span> ${esc(d.med.name)}</span><span class="dose">${d.med.strength ? esc(d.med.strength) + " · " : ""}${esc(M.administrationLabel(d.log, d.med))}</span>
+    <span class="chip ${d.status}">${d.log ? M.fmtLogged(d.log, d.day) : d.status === "upcoming" || d.status === "due" || d.status === "missed" ? (isCare() ? statusLabel(d.status) : esc(t("btn.logNow"))) : statusLabel(d.status)}</span>
+    ${d.log && d.log.by === "caregiver" && !isCare() ? `<span class="muted small">${esc(t("dose.by", { name: d.log.byName || t("common.caregiver") }))}</span>` : ""}
+    ${d.log && d.log.by === "patient" && isCare() && d.log.source === "pillbox" ? `<span class="muted small">${esc(t("dose.fromPillboxLower"))}</span>` : ""}</button>`).join("") + `</div>`;
 }
 
 // Patient Today: on-time rates, streak and badges.
@@ -200,10 +212,10 @@ function progressCard(pid) {
   const p = snap(pid);
   if (!p.meds.some(m => !M.isPrn(m))) return "";
   const a = M.adherenceProgress(p.meds, p.doses);
-  const bar = (label, r) => `<div class="prog-row"><span>${label}</span><div class="meter" role="progressbar" aria-label="${label} on time" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${r.pct ?? 0}"><i style="width:${r.pct ?? 0}%"></i></div><span class="mono">${r.pct ?? "–"}${r.pct != null ? "%" : ""}</span></div>`;
-  return `<section class="next stack-tight progress"><div class="row spread"><div class="eyebrow">On time (within ${M.ON_TIME_WINDOW_MIN} min)</div><div><span class="big-sm mono">${a.streak}</span> <span class="muted">${a.streak === 1 ? "day" : "days"} streak</span></div></div>
-    ${bar("7 days", a.rate7)}${bar("30 days", a.rate30)}
-    ${a.badges.length ? `<div class="badges">${a.badges.map(b => `<span class="badge" title="${esc(b.label)}"><span aria-hidden="true">${b.emoji}</span> ${esc(b.label)}</span>`).join("")}</div>` : ""}
+  const bar = (label, r) => `<div class="prog-row"><span>${label}</span><div class="meter" role="progressbar" aria-label="${esc(t("prog.onTimeAria", { label }))}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${r.pct ?? 0}"><i style="width:${r.pct ?? 0}%"></i></div><span class="mono">${r.pct ?? "–"}${r.pct != null ? "%" : ""}</span></div>`;
+  return `<section class="next stack-tight progress"><div class="row spread"><div class="eyebrow">${esc(t("prog.onTime", { n: M.ON_TIME_WINDOW_MIN }))}</div><div><span class="big-sm mono">${a.streak}</span> <span class="muted">${esc(tn("prog.streak", a.streak))}</span></div></div>
+    ${bar(t("prog.7days"), a.rate7)}${bar(t("prog.30days"), a.rate30)}
+    ${a.badges.length ? `<div class="badges">${a.badges.map(b => `<span class="badge" title="${esc(M.badgeLabel(b))}"><span aria-hidden="true">${b.emoji}</span> ${esc(M.badgeLabel(b))}</span>`).join("")}</div>` : ""}
     <div class="muted">${esc(a.message)}</div></section>`;
 }
 
@@ -224,36 +236,36 @@ function readEventForm() {
 document.addEventListener("input", e => { if (e.target.closest("#evform")) readEventForm(); });
 function eventItem(pid, e) {
   const p = snap(pid), t = M.EVENT_TYPES[e.type] || M.EVENT_TYPES.other, dose = e.treatedWith && p.doses[e.treatedWith];
-  const who = [e.by === "caregiver" ? "Logged by " + (e.byName || "caregiver") : "", e.editedBy && e.editedByName && e.editedByName !== e.byName ? "edited by " + e.editedByName : ""].filter(Boolean).join(", ");
+  const who = [e.by === "caregiver" ? t("ev.loggedBy", { name: e.byName || t("common.caregiver") }) : "", e.editedBy && e.editedByName && e.editedByName !== e.byName ? t("ev.editedBy", { name: e.editedByName }) : ""].filter(Boolean).join(", ");
   return `<button class="item item-btn ev-item ev-${esc(e.type)}" data-act="ev-open" data-pid="${pid}" data-id="${esc(e.id)}"><div class="stack-tight" style="min-width:0;flex:1">
     <div><span aria-hidden="true">${t.icon}</span> <strong>${esc(M.eventLabel(e))}</strong></div>
-    <div class="muted small"><span class="mono">${fmtClock(e.at)}</span>${dose ? " · Treated with " + esc(M.doseLinkLabel(dose, p.meds)) : ""}</div>
+    <div class="muted small"><span class="mono">${fmtClock(e.at)}</span>${dose ? " · " + esc(t("ev.treatedWithX", { dose: M.doseLinkLabel(dose, p.meds) })) : ""}</div>
     ${e.notes ? `<div class="ev-notes">${esc(e.notes)}</div>` : ""}${who ? `<div class="muted small">${esc(who)}</div>` : ""}</div><span class="chev" aria-hidden="true">›</span></button>`;
 }
 const eventList = (pid, list) => `<div class="list">${list.map(e => eventItem(pid, e)).join("")}</div>`;
 function eventSheet() {
   const sh = S.sheet, ev = sh.ev, p = snap(sh.pid), now = new Date();
-  if (!ev.type) return `<div class="eyebrow">Log event</div><h2>What happened?</h2>
-    <div class="ev-types">${Object.entries(M.EVENT_TYPES).map(([k, t]) => `<button class="ev-type" data-act="ev-type" data-type="${k}"><span aria-hidden="true">${t.icon}</span> ${esc(t.label)}</button>`).join("")}</div>
-    <button data-act="close-sheet">Cancel</button>`;
-  const toggles = (act, map, sel) => Object.entries(map).map(([k, l]) => `<button type="button" class="tog" data-act="${act}" data-v="${k}" aria-pressed="${String(sel) === k}">${esc(l)}</button>`).join("");
+  if (!ev.type) return `<div class="eyebrow">${esc(t("ev.log"))}</div><h2>${esc(t("ev.what"))}</h2>
+    <div class="ev-types">${Object.entries(M.EVENT_TYPES).map(([k, et]) => `<button class="ev-type" data-act="ev-type" data-type="${k}"><span aria-hidden="true">${et.icon}</span> ${esc(M.eventTypeLabel(k))}</button>`).join("")}</div>
+    <button data-act="close-sheet">${esc(t("btn.cancel"))}</button>`;
+  const toggles = (act, map, sel, name) => Object.keys(map).map(k => `<button type="button" class="tog" data-act="${act}" data-v="${k}" aria-pressed="${String(sel) === k}">${esc(name(k))}</button>`).join("");
   const links = M.recentDosesForLink(p.meds, p.doses);
   if (ev.treatedWith && !links.some(x => x.key === ev.treatedWith))
-    links.push({ key: ev.treatedWith, label: p.doses[ev.treatedWith] ? M.doseLinkLabel(p.doses[ev.treatedWith], p.meds) : "Earlier dose (no longer logged)" });
-  return `<form class="stack" id="evform"><div class="eyebrow">${sh.evId ? "Edit event" : "Log event"}</div>
-    <div class="opts" role="group" aria-label="Type of event">${Object.entries(M.EVENT_TYPES).map(([k, t]) => `<button type="button" class="tog" data-act="ev-type" data-type="${k}" aria-pressed="${ev.type === k}"><span aria-hidden="true">${t.icon}</span> ${esc(t.label)}</button>`).join("")}</div>
-    <div class="field"><div class="lbl" id="ev-where">Where (optional)</div>${bodyMapHtml(ev.area, ev.type === "bleed" ? "bad" : "accent", bodyFigure())}
-      <label for="ev-area">Or choose from the list</label><select id="ev-area" name="area"><option value="">Not set</option>${Object.entries(M.BODY_AREAS).filter(([k]) => !M.LEGACY_BODY_AREAS.includes(k) || k === ev.area).map(([k, l]) => opt(k, l, ev.area)).join("")}</select></div>
-    <div class="field"><div class="lbl" id="ev-sev-l">How bad (optional)</div><div class="opts" role="group" aria-labelledby="ev-sev-l">${toggles("ev-sev", M.SEVERITIES, ev.severity)}</div></div>
-    ${ev.type === "bleed" ? `<div class="field"><div class="lbl" id="ev-cause-l">Cause (optional)</div><div class="opts" role="group" aria-labelledby="ev-cause-l">${toggles("ev-cause", M.BLEED_CAUSES, ev.cause)}</div></div>` : ""}
-    ${ev.type === "activity" ? `<div class="field"><label for="ev-dur">How long (optional)</label><div class="amount"><input id="ev-dur" name="durationMin" type="number" min="1" max="1440" inputmode="numeric" value="${esc(ev.durationMin)}"><span>minutes</span></div></div>` : ""}
-    <div class="field"><label for="ev-tx">Treated with (optional)</label><select id="ev-tx" name="treatedWith"><option value="">Nothing / not yet</option>${links.map(x => opt(x.key, x.label, ev.treatedWith)).join("")}</select>
-      ${links.length ? "" : `<div class="muted small">No doses taken in the last 48 hours.</div>`}</div>
-    <div class="field"><label for="ev-notes">Notes (optional)</label><textarea id="ev-notes" name="notes" rows="2" placeholder="e.g. Swelling after football">${esc(ev.notes)}</textarea></div>
-    <div class="field"><label for="ev-at">When</label><input id="ev-at" name="atLocal" type="datetime-local" required max="${localInput(now)}" value="${esc(ev.atLocal)}"></div>
+    links.push({ key: ev.treatedWith, label: p.doses[ev.treatedWith] ? M.doseLinkLabel(p.doses[ev.treatedWith], p.meds) : t("ev.earlierDose") });
+  return `<form class="stack" id="evform"><div class="eyebrow">${esc(t(sh.evId ? "ev.edit" : "ev.log"))}</div>
+    <div class="opts" role="group" aria-label="${esc(t("ev.typeAria"))}">${Object.entries(M.EVENT_TYPES).map(([k, et]) => `<button type="button" class="tog" data-act="ev-type" data-type="${k}" aria-pressed="${ev.type === k}"><span aria-hidden="true">${et.icon}</span> ${esc(M.eventTypeLabel(k))}</button>`).join("")}</div>
+    <div class="field"><div class="lbl" id="ev-where">${esc(t("ev.where"))}</div>${bodyMapHtml(ev.area, ev.type === "bleed" ? "bad" : "accent", bodyFigure())}
+      <label for="ev-area">${esc(t("ev.orList"))}</label><select id="ev-area" name="area"><option value="">${esc(t("ev.notSet"))}</option>${Object.keys(M.BODY_AREAS).filter(k => !M.LEGACY_BODY_AREAS.includes(k) || k === ev.area).map(k => opt(k, M.areaName(k), ev.area)).join("")}</select></div>
+    <div class="field"><div class="lbl" id="ev-sev-l">${esc(t("ev.howBad"))}</div><div class="opts" role="group" aria-labelledby="ev-sev-l">${toggles("ev-sev", M.SEVERITIES, ev.severity, M.severityLabel)}</div></div>
+    ${ev.type === "bleed" ? `<div class="field"><div class="lbl" id="ev-cause-l">${esc(t("ev.cause"))}</div><div class="opts" role="group" aria-labelledby="ev-cause-l">${toggles("ev-cause", M.BLEED_CAUSES, ev.cause, M.causeLabel)}</div></div>` : ""}
+    ${ev.type === "activity" ? `<div class="field"><label for="ev-dur">${esc(t("ev.howLong"))}</label><div class="amount"><input id="ev-dur" name="durationMin" type="number" min="1" max="1440" inputmode="numeric" value="${esc(ev.durationMin)}"><span>${esc(t("ev.minutes"))}</span></div></div>` : ""}
+    <div class="field"><label for="ev-tx">${esc(t("ev.treatedWith"))}</label><select id="ev-tx" name="treatedWith"><option value="">${esc(t("ev.nothingYet"))}</option>${links.map(x => opt(x.key, x.label, ev.treatedWith)).join("")}</select>
+      ${links.length ? "" : `<div class="muted small">${esc(t("ev.noRecent"))}</div>`}</div>
+    <div class="field"><label for="ev-notes">${esc(t("ev.notes"))}</label><textarea id="ev-notes" name="notes" rows="2" placeholder="${esc(t("ev.notesPh"))}">${esc(ev.notes)}</textarea></div>
+    <div class="field"><label for="ev-at">${esc(t("ev.when"))}</label><input id="ev-at" name="atLocal" type="datetime-local" required max="${localInput(now)}" value="${esc(ev.atLocal)}"></div>
     ${sh.error ? `<div class="banner dup">${esc(sh.error)}</div>` : ""}
-    <div class="row spread"><div class="row"><button class="btn-primary" type="submit">Save</button><button type="button" data-act="close-sheet">Cancel</button></div>
-      ${sh.evId ? `<button type="button" class="btn-danger btn-sm" data-act="ev-delete">${sh.confirmDelete ? "Tap again to delete" : "Delete"}</button>` : ""}</div></form>`;
+    <div class="row spread"><div class="row"><button class="btn-primary" type="submit">${esc(t("btn.save"))}</button><button type="button" data-act="close-sheet">${esc(t("btn.cancel"))}</button></div>
+      ${sh.evId ? `<button type="button" class="btn-danger btn-sm" data-act="ev-delete">${esc(t(sh.confirmDelete ? "btn.tapAgainDelete" : "btn.delete"))}</button>` : ""}</div></form>`;
 }
 
 function todayBlock(pid) {
@@ -264,101 +276,104 @@ function todayBlock(pid) {
   const taken = list.filter(d => d.status === "taken").length;
   let h = "";
   if (dueNow.length) {
-    h += `<section class="stack"><h2>${dueNow.some(d => d.status === "missed") ? "Late" : "Due now"}</h2>` + dueNow.map(d => `<div class="due-row"><button class="log-one" data-act="well" data-pid="${pid}" data-key="${d.key}">
-      <span class="eyebrow">${d.status === "missed" ? "Late" : "Due now"} · ${fmtTime(d.time)}</span>
+    h += `<section class="stack"><h2>${esc(t(dueNow.some(d => d.status === "missed") ? "today.late" : "today.dueNow"))}</h2>` + dueNow.map(d => `<div class="due-row"><button class="log-one" data-act="well" data-pid="${pid}" data-key="${d.key}">
+      <span class="eyebrow">${esc(t(d.status === "missed" ? "today.late" : "today.dueNow"))} · ${fmtTime(d.time)}</span>
       <span class="take-label"><span aria-hidden="true">${M.typeIcon(d.med)}</span> ${esc(d.med.name)}</span>
-      <span class="take-meds">Log ${esc(M.doseLabel(d.med))} now</span></button>
-      <button class="btn-sm" data-act="open-sheet" data-pid="${pid}" data-key="${d.key}">Other time</button></div>`).join("") + `</section>`;
+      <span class="take-meds">${esc(t("today.logDoseNow", { dose: M.doseLabel(d.med) }))}</span></button>
+      <button class="btn-sm" data-act="open-sheet" data-pid="${pid}" data-key="${d.key}">${esc(t("today.otherTime"))}</button></div>`).join("") + `</section>`;
   } else {
-    h += `<section class="next"><div class="row spread"><div><div class="eyebrow">Next dose</div>${upcoming ? `<div class="big time">${fmtTime(upcoming.time)}</div><div><strong>${esc(upcoming.med.name)}</strong> ${esc(upcoming.med.strength)}</div><div class="muted">in ${M.rel(upcoming.when - now)}</div>` : `<div class="big">All done</div><div class="muted">${list.length ? "No more doses today." : "No scheduled doses."}</div>`}</div>
-      <div style="text-align:right"><div class="eyebrow">Taken</div><div class="big mono">${taken}/${list.length}</div></div></div></section>`;
+    h += `<section class="next"><div class="row spread"><div><div class="eyebrow">${esc(t("today.nextDose"))}</div>${upcoming ? `<div class="big time">${fmtTime(upcoming.time)}</div><div><strong>${esc(upcoming.med.name)}</strong> ${esc(upcoming.med.strength)}</div><div class="muted">${esc(t("today.in", { time: M.rel(upcoming.when - now) }))}</div>` : `<div class="big">${esc(t("today.allDone"))}</div><div class="muted">${esc(t(list.length ? "today.noMore" : "today.noScheduled"))}</div>`}</div>
+      <div style="text-align:right"><div class="eyebrow">${esc(t("today.taken"))}</div><div class="big mono">${taken}/${list.length}</div></div></div></section>`;
   }
   if (!isCare()) h += progressCard(pid);
   const evs = M.eventsOn(now, p.events);
-  h += `<section class="stack"><button class="log-event" data-act="ev-new" data-pid="${pid}"><span aria-hidden="true">＋</span> Log event</button>
-    ${evs.length ? `<h2>Today's events</h2>${eventList(pid, evs)}` : ""}</section>`;
-  h += `<section class="stack"><h2>Today's doses</h2>`;
-  h += rest.length ? wells(pid, rest) : (dueNow.length ? "" : `<p class="muted">${isCare() ? "No scheduled doses today." : "Add a medicine with times and it shows up here."}</p>`);
+  h += `<section class="stack"><button class="log-event" data-act="ev-new" data-pid="${pid}"><span aria-hidden="true">＋</span> ${esc(t("ev.log"))}</button>
+    ${evs.length ? `<h2>${esc(t("today.events"))}</h2>${eventList(pid, evs)}` : ""}</section>`;
+  h += `<section class="stack"><h2>${esc(t("today.doses"))}</h2>`;
+  h += rest.length ? wells(pid, rest) : (dueNow.length ? "" : `<p class="muted">${esc(t(isCare() ? "today.noScheduledToday" : "today.addHint"))}</p>`);
   h += `</section>`;
   const prn = p.meds.filter(M.isPrn);
-  if (prn.length) h += `<section class="stack"><h2>As needed</h2><div class="list">` + prn.map(m => { const l = M.lastTaken(m.id, p.doses); return `<div class="item"><div><span aria-hidden="true">${M.typeIcon(m)}</span> <strong>${esc(m.name)}</strong> ${esc(m.strength)} <span class="muted">· ${esc(M.doseLabel(m))}</span><div class="muted">${l ? "Last logged " + fmtClock(l.at) + (l.day === dayKey(now) ? " today" : " on " + M.parseDay(l.day).toLocaleDateString()) : "Nothing logged yet"}</div></div><button class="btn-sm" data-act="take-prn" data-pid="${pid}" data-med="${m.id}">Log treatment</button></div>`; }).join("") + `</div></section>`;
+  if (prn.length) h += `<section class="stack"><h2>${esc(t("today.asNeeded"))}</h2><div class="list">` + prn.map(m => { const l = M.lastTaken(m.id, p.doses); return `<div class="item"><div><span aria-hidden="true">${M.typeIcon(m)}</span> <strong>${esc(m.name)}</strong> ${esc(m.strength)} <span class="muted">· ${esc(M.doseLabel(m))}</span><div class="muted">${esc(l ? (l.day === dayKey(now) ? t("today.lastToday", { time: fmtClock(l.at) }) : t("today.lastOn", { time: fmtClock(l.at), date: fmtDateL(M.parseDay(l.day)) })) : t("today.nothingYet"))}</div></div><button class="btn-sm" data-act="take-prn" data-pid="${pid}" data-med="${m.id}">${esc(t("btn.logTreatment"))}</button></div>`; }).join("") + `</div></section>`;
   const low = M.lowStock(p.meds, p.doses);
-  if (low.length) h += `<div class="banner dup"><div><strong>Refill soon:</strong> ${low.map(m => esc(m.name) + " (" + left(m, p.doses) + " left)").join(", ")}</div></div>`;
+  if (low.length) h += `<div class="banner dup"><div><strong>${esc(t("supply.refillSoon"))}</strong> ${low.map(m => esc(m.name) + " (" + esc(t("supply.left", { qty: left(m, p.doses) })) + ")").join(", ")}</div></div>`;
   return h;
 }
 
-const CAL_STATUS = { taken: "Taken", skipped: "Skipped", missed: "Missed", due: "Due", upcoming: "Upcoming" };
 // The "actual" side of a calendar day row: when it was taken (and how far off schedule), or why not.
 function actualText(d) {
-  if (d.status === "missed") return `<strong class="stock-low">Missed · not taken</strong>`;
-  if (!d.log) return `<span class="muted">Not taken yet</span>`;
-  const t = new Date(d.log.at), off = t.getTime() - d.when;
-  const logged = esc(M.fmtLogged(d.log, d.day)).replace(/(\d{1,2}:\d{2} [AP]M)$/, `<strong class="mono">$1</strong>`);
+  if (d.status === "missed") return `<strong class="stock-low">${esc(t("cal.missedNotTaken"))}</strong>`;
+  if (!d.log) return `<span class="muted">${esc(t("cal.notTakenYet"))}</span>`;
+  const off = new Date(d.log.at).getTime() - d.when;
+  const logged = esc(M.fmtLogged(d.log, d.day)).replace(/(\d{1,2}:\d{2}.*)$/, `<strong class="mono">$1</strong>`);
   if (d.log.status !== "taken") return logged;
-  return logged + (M.isOnTime(d) ? ` <span class="ontime">· on time</span>` : ` <span class="late">· ${M.rel(off)} ${off > 0 ? "late" : "early"}</span>`);
+  return logged + (M.isOnTime(d) ? ` <span class="ontime">· ${esc(t("cal.onTime"))}</span>` : ` <span class="late">· ${esc(t(off > 0 ? "cal.late" : "cal.early", { time: M.rel(off) }))}</span>`);
 }
 function calendarBlock(pid) {
   const p = snap(pid), { y, m, sel } = S.cal, first = new Date(y, m, 1), days = new Date(y, m + 1, 0).getDate();
-  const title = first.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const title = capFirst(fmtDateL(first, { month: "long", year: "numeric" }));
   const todayK = dayKey(new Date());
   let cells = "";
   for (let i = 0; i < first.getDay(); i++) cells += `<span></span>`;
   for (let d = 1; d <= days; d++) {
     const date = new Date(y, m, d), k = dayKey(date), s = M.daySummary(date, p.meds, p.doses, opts()), ne = M.eventsOn(date, p.events).length;
-    cells += `<button class="cal-day ${s.state}${k === sel ? " sel" : ""}${k === todayK ? " today" : ""}" data-act="cal-sel" data-day="${k}" aria-label="${date.toDateString()}: ${s.taken} of ${s.total} taken${ne ? ", " + ne + (ne === 1 ? " event" : " events") : ""}"><span>${d}</span>${s.total && date <= new Date() ? `<i>${s.taken}/${s.total}</i>` : ""}${ne ? `<b class="ev-dot" aria-hidden="true"></b>` : ""}</button>`;
+    cells += `<button class="cal-day ${s.state}${k === sel ? " sel" : ""}${k === todayK ? " today" : ""}" data-act="cal-sel" data-day="${k}" aria-label="${esc(fmtDateL(date, { weekday: "long", month: "long", day: "numeric", year: "numeric" }) + ": " + t("cal.xOfYTaken", { taken: s.taken, total: s.total }) + (ne ? ", " + tn("cal.events", ne) : ""))}"><span>${d}</span>${s.total && date <= new Date() ? `<i>${s.taken}/${s.total}</i>` : ""}${ne ? `<b class="ev-dot" aria-hidden="true"></b>` : ""}</button>`;
   }
   const selDate = M.parseDay(sel), sum = M.daySummary(selDate, p.meds, p.doses, opts());
   const extras = Object.entries(p.doses).filter(([, v]) => v.extra && v.day === sel), dayEvents = M.eventsOn(selDate, p.events);
   const ad = M.adherence(p.meds, p.doses, 30);
   return `<section class="stack">
-    <div class="row spread"><button class="btn-sm" data-act="cal-prev" aria-label="Previous month">‹</button><h2>${esc(title)}</h2><button class="btn-sm" data-act="cal-next" aria-label="Next month">›</button></div>
-    <div class="cal"><div class="cal-head">${["S", "M", "T", "W", "T", "F", "S"].map(x => `<span>${x}</span>`).join("")}</div><div class="cal-grid">${cells}</div></div>
-    <div class="legend"><span><i class="lg all"></i>All taken</span><span><i class="lg some"></i>Some missed</span><span><i class="lg none"></i>None taken</span></div>
-    <div class="next"><div class="eyebrow">Last 30 days</div><div class="big mono">${ad.pct ?? "–"}${ad.pct != null ? "%" : ""}</div><div class="muted">${ad.taken} of ${ad.total} scheduled doses taken</div></div>
-    <h2 id="day-detail">${selDate.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</h2>
-    ${sum.list.length ? `<div class="muted">${sum.taken} of ${sum.total} scheduled doses taken${sum.list.some(d => d.status === "missed") ? ` · <span class="stock-low">${sum.list.filter(d => d.status === "missed").length} missed</span>` : ""}</div>` : ""}
+    <div class="row spread"><button class="btn-sm" data-act="cal-prev" aria-label="${esc(t("cal.prev"))}">‹</button><h2>${esc(title)}</h2><button class="btn-sm" data-act="cal-next" aria-label="${esc(t("cal.next"))}">›</button></div>
+    <div class="cal"><div class="cal-head">${[0, 1, 2, 3, 4, 5, 6].map(i => `<span>${esc(weekdayLetter(i))}</span>`).join("")}</div><div class="cal-grid">${cells}</div></div>
+    <div class="legend"><span><i class="lg all"></i>${esc(t("cal.allTaken"))}</span><span><i class="lg some"></i>${esc(t("cal.someMissed"))}</span><span><i class="lg none"></i>${esc(t("cal.noneTaken"))}</span></div>
+    <div class="next"><div class="eyebrow">${esc(t("cal.last30"))}</div><div class="big mono">${ad.pct ?? "–"}${ad.pct != null ? "%" : ""}</div><div class="muted">${esc(t("cal.scheduledTaken", { taken: ad.taken, total: ad.total }))}</div></div>
+    <h2 id="day-detail">${esc(longDate(selDate))}</h2>
+    ${sum.list.length ? `<div class="muted">${esc(t("cal.scheduledTaken", { taken: sum.taken, total: sum.total }))}${sum.list.some(d => d.status === "missed") ? ` · <span class="stock-low">${esc(tn("cal.missed", sum.list.filter(d => d.status === "missed").length))}</span>` : ""}</div>` : ""}
     ${sum.list.length || extras.length ? `<div class="list day-list">` + sum.list.map(d => `<div class="item dd ${d.status}"><div class="stack-tight">
-        <div><span aria-hidden="true">${M.typeIcon(d.med)}</span> <strong>${esc(d.med.name)}</strong> ${esc(d.med.strength || "")} <span class="chip ${d.status}">${CAL_STATUS[d.status] || d.status}</span></div>
+        <div><span aria-hidden="true">${M.typeIcon(d.med)}</span> <strong>${esc(d.med.name)}</strong> ${esc(d.med.strength || "")} <span class="chip ${d.status}">${esc(statusLabel(d.status))}</span></div>
         <div class="dd-amt">${esc(M.administrationLabel(d.log, d.med))}</div>
-        <div class="dd-times"><span>Scheduled <strong class="mono">${fmtTime(d.time)}</strong></span><span>${actualText(d)}</span></div>
-        ${d.log && (d.log.by === "caregiver" || d.log.source === "pillbox") ? `<div class="muted small">${d.log.by === "caregiver" ? "Logged by " + esc(d.log.byName || "caregiver") : ""}${d.log.by === "caregiver" && d.log.source === "pillbox" ? " · " : ""}${d.log.source === "pillbox" ? "From pillbox" : ""}</div>` : ""}</div>
-      ${d.log ? `<button class="btn-sm" data-act="undo" data-pid="${pid}" data-key="${d.key}">Undo</button>` : d.status !== "upcoming" ? `<button class="btn-sm btn-primary" data-act="open-sheet" data-pid="${pid}" data-key="${d.key}">Log…</button>` : ""}</div>`).join("")
-      + extras.map(([k, v]) => { const med = p.meds.find(x => x.id === v.medId); return `<div class="item dd taken"><div class="stack-tight"><div>${med ? `<span aria-hidden="true">${M.typeIcon(med)}</span> ` : ""}<strong>${esc(med ? med.name : "Medicine")}</strong> ${esc(med?.strength || "")} <span class="chip taken">additional</span></div>${med ? `<div class="dd-amt">${esc(M.administrationLabel(v, med))}</div>` : ""}<div class="dd-times"><span>Not a scheduled dose</span><span>Logged <strong class="mono">${fmtClock(v.at)}</strong></span></div></div><button class="btn-sm" data-act="open-sheet" data-pid="${pid}" data-key="${k}">Details</button></div>`; }).join("") + `</div>` : `<p class="muted">Nothing scheduled.</p>`}
-    ${dayEvents.length ? `<h3>Events</h3>${eventList(pid, dayEvents)}` : ""}
+        <div class="dd-times"><span>${esc(t("dose.scheduled"))} <strong class="mono">${fmtTime(d.time)}</strong></span><span>${actualText(d)}</span></div>
+        ${d.log && (d.log.by === "caregiver" || d.log.source === "pillbox") ? `<div class="muted small">${d.log.by === "caregiver" ? esc(t("ev.loggedBy", { name: d.log.byName || t("common.caregiver") })) : ""}${d.log.by === "caregiver" && d.log.source === "pillbox" ? " · " : ""}${d.log.source === "pillbox" ? esc(t("dose.fromPillbox")) : ""}</div>` : ""}</div>
+      ${d.log ? `<button class="btn-sm" data-act="undo" data-pid="${pid}" data-key="${d.key}">${esc(t("btn.undo"))}</button>` : d.status !== "upcoming" ? `<button class="btn-sm btn-primary" data-act="open-sheet" data-pid="${pid}" data-key="${d.key}">${esc(t("btn.logEllipsis"))}</button>` : ""}</div>`).join("")
+      + extras.map(([k, v]) => { const med = p.meds.find(x => x.id === v.medId); return `<div class="item dd taken"><div class="stack-tight"><div>${med ? `<span aria-hidden="true">${M.typeIcon(med)}</span> ` : ""}<strong>${esc(med ? med.name : t("common.medicine"))}</strong> ${esc(med?.strength || "")} <span class="chip taken">${esc(t("chip.additional"))}</span></div>${med ? `<div class="dd-amt">${esc(M.administrationLabel(v, med))}</div>` : ""}<div class="dd-times"><span>${esc(t("cal.notScheduled"))}</span><span>${esc(t("cal.logged"))} <strong class="mono">${fmtClock(v.at)}</strong></span></div></div><button class="btn-sm" data-act="open-sheet" data-pid="${pid}" data-key="${k}">${esc(t("btn.details"))}</button></div>`; }).join("") + `</div>` : `<p class="muted">${esc(t("cal.nothingScheduled"))}</p>`}
+    ${dayEvents.length ? `<h3>${esc(t("cal.eventsHead"))}</h3>${eventList(pid, dayEvents)}` : ""}
   </section>`;
 }
 
-const REASON = { taken: "Treatment logged", undo: "Supply restored", refill: "Refill", adjust: "Count corrected", start: "Starting count", removed: "Log removed", edit: "Log corrected", additional: "Additional treatment", skip: "Scheduled dose skipped" };
-const fmtDate = d => d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-const cap = s => s === "mL" ? s : s.charAt(0).toUpperCase() + s.slice(1);
+const REASONS = ["taken", "undo", "refill", "adjust", "start", "removed", "edit", "additional", "skip"];
+const reasonLabel = r => t(REASONS.includes(r) ? "reason." + r : "reason.change");
+// Notes the dose log writes itself are stored in English; show them in the current language.
+const SYS_NOTES = { "additional treatment": "note.additional", "skipped": "note.skipped", "additional treatment removed": "note.additionalRemoved", "logged treatment removed": "note.loggedRemoved" };
+const noteLabel = n => SYS_NOTES[n] ? t(SYS_NOTES[n]) : n;
+const fmtDate = d => fmtDateL(d, { weekday: "short", month: "short", day: "numeric" });
+const cap = s => s === "mL" ? s : capFirst(s);
 const left = (m, doses) => { const s = M.supply(m, Date.now(), doses); return M.qty(s.left || 0, s.unit); };
 function supplyLine(m, doses) {
   const s = M.supply(m, Date.now(), doses);
-  if (s.left == null) return `<span class="muted">Supply not tracked</span>`;
-  const days = s.daysLeft != null ? ` · about ${s.daysLeft} ${s.daysLeft === 1 ? "day" : "days"}, runs out ${fmtDate(s.runOut)}` : "";
-  return `<span class="${s.low ? "stock-low" : "muted"}">${s.out ? "Out of " + M.unitName(s.unit) : M.qty(s.left, s.unit) + " left"}${days}${s.low && !s.out ? " · refill soon" : ""}</span>`;
+  if (s.left == null) return `<span class="muted">${esc(t("supply.notTracked"))}</span>`;
+  const days = s.daysLeft != null ? " · " + tn("supply.aboutDays", s.daysLeft, { date: fmtDate(s.runOut) }) : "";
+  return `<span class="${s.low ? "stock-low" : "muted"}">${esc(capFirst(s.out ? t("supply.outOf", { unit: M.unitName(s.unit) }) : t("supply.left", { qty: M.qty(s.left, s.unit) })) + days + (s.low && !s.out ? " · " + t("supply.refillSoonLower") : ""))}</span>`;
 }
 function supplyBar(m, doses) {
   const s = M.supply(m, Date.now(), doses); if (s.left == null) return "";
   const full = Math.max(m.fullCount || 0, s.left, 1), pct = Math.round(s.left / full * 100);
-  return `<div class="meter ${s.low ? "low" : ""}" role="img" aria-label="${M.fmtNum(s.left)} of ${M.qty(full, s.unit)} left"><i style="width:${pct}%"></i></div>`;
+  return `<div class="meter ${s.low ? "low" : ""}" role="img" aria-label="${esc(t("supply.xOfY", { n: M.fmtNum(s.left), qty: M.qty(full, s.unit) }))}"><i style="width:${pct}%"></i></div>`;
 }
 const timesText = m => M.isPrn(m) ? "" : " · " + m.times.map(fmtTime).join(", ");
-// "3 shots" counter on a medicine row; opens Shot history (or Dose history for non-injections).
+// "3 shots" / "3 inyecciones" counter on a medicine row; opens Shot history (or Dose history for non-injections).
 function historyButton(m, doses) {
   const n = doseHistory(m, doses).total, w = historyNoun(m);
-  return `<button class="btn-sm count-btn" data-act="med-history" data-med="${m.id}" aria-label="${esc(w.title)} for ${esc(m.name)}, ${historyCount(m, n)}"><span class="mono">${n}</span> ${n === 1 ? w.one : w.many}</button>`;
+  return `<button class="btn-sm count-btn" data-act="med-history" data-med="${m.id}" aria-label="${esc(t("hist.aria", { title: w.title, name: m.name, count: historyCount(m, n) }))}"><span class="mono">${n}</span> ${n === 1 ? w.one : w.many}</button>`;
 }
 const fmtDay = key => { const d = M.parseDay(key), today = dayKey(new Date()), y = new Date(); y.setDate(y.getDate() - 1);
-  return key === today ? "Today" : key === dayKey(y) ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) }); };
+  return key === today ? t("day.today") : key === dayKey(y) ? t("day.yesterday") : capFirst(fmtDateL(d, { weekday: "short", month: "short", day: "numeric", ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) })); };
 function historyView(pid, m) {
   const p = snap(pid), h = doseHistory(m, p.doses), w = historyNoun(m);
-  return `<div class="row spread"><button class="btn-sm" data-act="history-close">‹ ${esc(m.name)}</button><button class="btn-sm" data-act="edit" data-med="${m.id}">Edit</button></div>
+  return `<div class="row spread"><button class="btn-sm" data-act="history-close">‹ ${esc(m.name)}</button><button class="btn-sm" data-act="edit" data-med="${m.id}">${esc(t("btn.edit"))}</button></div>
    <section class="sheet stack"><div><div class="eyebrow">${esc(w.title)}</div><h2><span aria-hidden="true">${M.typeIcon(m)}</span> ${esc(m.name)} ${esc(m.strength)}</h2></div>
-     <div class="history-total"><span class="big mono">${h.total}</span> <span class="muted">${h.total === 1 ? w.one : w.many} taken</span></div>
+     <div class="history-total"><span class="big mono">${h.total}</span> <span class="muted">${esc(t(w.shot ? (h.total === 1 ? "hist.shotTaken_one" : "hist.shotTaken_other") : (h.total === 1 ? "hist.doseTaken_one" : "hist.doseTaken_other")))}</span></div>
    </section>
-   ${h.total ? h.days.map(g => `<section class="stack-tight history-day"><h3>${esc(fmtDay(g.day))}</h3><div class="list">` + g.entries.map(e => `<div class="item"><span class="mono">${fmtClock(e.at)}</span><span class="history-amt">${esc(e.amount)}${e.extra ? ` <span class="chip">additional</span>` : ""}${e.edited ? ` <span class="chip">corrected</span>` : ""}</span></div>`).join("") + `</div></section>`).join("")
-     : `<div class="sheet empty-state"><strong>No ${w.many} yet</strong><div class="muted">${w.many === "shots" ? "Shots" : "Doses"} you log for ${esc(m.name)} show up here, newest first.</div></div>`}`;
+   ${h.total ? h.days.map(g => `<section class="stack-tight history-day"><h3>${esc(fmtDay(g.day))}</h3><div class="list">` + g.entries.map(e => `<div class="item"><span class="mono">${fmtClock(e.at)}</span><span class="history-amt">${esc(e.amount)}${e.extra ? ` <span class="chip">${esc(t("chip.additional"))}</span>` : ""}${e.edited ? ` <span class="chip">${esc(t("chip.corrected"))}</span>` : ""}</span></div>`).join("") + `</div></section>`).join("")
+     : `<div class="sheet empty-state"><strong>${esc(t(w.shot ? "hist.noShots" : "hist.noDoses"))}</strong><div class="muted">${esc(t(w.shot ? "hist.emptyShots" : "hist.emptyDoses", { name: m.name }))}</div></div>`}`;
 }
 function medsBlock(pid) {
   const p = snap(pid);
@@ -366,84 +381,71 @@ function medsBlock(pid) {
   if (S.medHistory) { const m = p.meds.find(x => x.id === S.medHistory); if (m) return historyView(pid, m); S.medHistory = null; }
   if (S.medDetail) { const m = p.meds.find(x => x.id === S.medDetail); if (m) return medDetail(pid, m); S.medDetail = null; }
   const low = M.lowStock(p.meds, p.doses);
-  return (low.length ? `<div class="banner dup"><div><strong>Refill soon:</strong> ${low.map(m => esc(m.name)).join(", ")}</div></div>` : "") +
+  return (low.length ? `<div class="banner dup"><div><strong>${esc(t("supply.refillSoon"))}</strong> ${low.map(m => esc(m.name)).join(", ")}</div></div>` : "") +
     `<div class="list">` + (p.meds.length ? p.meds.map(m => `<div class="med-row"><button class="item-btn" data-act="med-open" data-med="${m.id}"><div class="row" style="flex-wrap:nowrap;min-width:0;width:100%"><span class="swatch" style="background:${esc(m.color)}"></span><div class="stack-tight" style="min-width:0;flex:1"><div><span aria-hidden="true">${M.typeIcon(m)}</span> <strong>${esc(m.name)}</strong> ${esc(m.strength)}</div>
      <div class="muted">${esc(M.medSummary(m))}${timesText(m)}</div>
      ${supplyBar(m, p.doses)}<div>${supplyLine(m, p.doses)}</div></div><span class="chev" aria-hidden="true">›</span></div></button>
-     ${historyButton(m, p.doses)}</div>`).join("") : `<div class="item muted">No medicines yet.</div>`) + `</div>
-    <div class="row"><button class="btn-primary" data-act="new">Add medicine</button></div>`;
+     ${historyButton(m, p.doses)}</div>`).join("") : `<div class="item muted">${esc(t("meds.none"))}</div>`) + `</div>
+    <div class="row"><button class="btn-primary" data-act="new">${esc(t("meds.add"))}</button></div>`;
 }
 function medDetail(pid, m) {
   const p = snap(pid), s = M.supply(m, Date.now(), p.doses), u = s.unit;
   const log = (p.stockLog || []).filter(e => e.medId === m.id).slice().reverse().slice(0, 40);
   const st = S.stockForm;
-  const runText = s.runOut ? `Runs out around <strong>${fmtDate(s.runOut)}</strong>.`
-    : s.left == null ? "Set a count to start tracking supply."
-    : M.isPrn(m) ? "As-needed medicine, so there's no run-out date."
-    : "Enough for every scheduled dose" + (m.end ? " until it ends." : " for now.");
-  return `<div class="row spread"><button class="btn-sm" data-act="med-close">‹ All medicines</button><div class="row"><button class="btn-sm" data-act="med-history" data-med="${m.id}">${esc(historyNoun(m).title)}</button><button class="btn-sm" data-act="edit" data-med="${m.id}">Edit</button></div></div>
+  const runText = s.runOut ? t("supply.runsOut", { date: `<strong>${esc(fmtDate(s.runOut))}</strong>` })
+    : esc(s.left == null ? t("supply.setCount")
+    : M.isPrn(m) ? t("supply.prnNoRunOut")
+    : t(m.end ? "supply.enoughUntilEnd" : "supply.enoughForNow"));
+  return `<div class="row spread"><button class="btn-sm" data-act="med-close">‹ ${esc(t("meds.all"))}</button><div class="row"><button class="btn-sm" data-act="med-history" data-med="${m.id}">${esc(historyNoun(m).title)}</button><button class="btn-sm" data-act="edit" data-med="${m.id}">${esc(t("btn.edit"))}</button></div></div>
    <section class="sheet stack"><div><div class="eyebrow">${esc(M.medSummary(m))}</div><h2><span aria-hidden="true">${M.typeIcon(m)}</span> ${esc(m.name)} ${esc(m.strength)}</h2>
-     ${!M.isPrn(m) ? `<div class="muted">${m.times.map(fmtTime).join(", ")}${m.start ? " · from " + fmtDate(M.parseDay(m.start)) : ""}${m.end ? " to " + fmtDate(M.parseDay(m.end)) : ""}</div>` : ""}
-     ${m.prescribedBy ? `<div class="muted">Prescribed by ${esc(m.prescribedBy)}</div>` : ""}
-     ${m.catalog?.rxcui ? `<div class="muted small">Package name from NIH RxNorm ${esc(m.catalog.rxcui)}${m.catalog.ndc ? " · NDC " + esc(m.catalog.ndc) : ""}. This is not your dose.</div>` : ""}
-     ${m.updatedByName ? `<div class="muted small">Last changed by ${esc(m.updatedByName)}${m.updatedByRole === "caregiver" ? " (care team)" : ""}${m.updatedAt ? " on " + fmtDate(new Date(m.updatedAt)) : ""}</div>` : ""}</div>
-     <div class="row spread" style="flex-wrap:nowrap"><div><strong>Log actual treatment</strong><div class="muted small">Records what was given. An additional log does not move reminders or change the saved dose. To correct a scheduled dose, open that dose.</div></div><button class="btn-sm" data-act="log-additional" data-pid="${pid}" data-med="${m.id}">Log</button></div>
-     ${!isCare() && !M.isPrn(m) ? `<div class="row spread" style="flex-wrap:nowrap"><div><strong>Add to my calendar</strong><div class="muted small">${m.addToCalendar ? (m.calendarEventIds?.length ? "On. Repeating events are in your phone's calendar." : "On. Added with a calendar file.") : "Off. Puts each dose in your phone's calendar."}</div></div>
-       <button class="btn-sm ${m.addToCalendar ? "" : "btn-primary"}" role="switch" aria-checked="${!!m.addToCalendar}" data-act="cal-toggle" data-med="${m.id}">${m.addToCalendar ? "Turn off" : "Turn on"}</button></div>` : ""}
+     ${!M.isPrn(m) ? `<div class="muted">${m.times.map(fmtTime).join(", ")}${esc(m.start ? " · " + t("meds.from", { date: fmtDate(M.parseDay(m.start)) }) : "")}${esc(m.end ? " " + t("meds.to", { date: fmtDate(M.parseDay(m.end)) }) : "")}</div>` : ""}
+     ${m.prescribedBy ? `<div class="muted">${esc(t("meds.prescribedBy", { name: m.prescribedBy }))}</div>` : ""}
+     ${m.catalog?.rxcui ? `<div class="muted small">${esc(t("meds.rxnorm", { id: m.catalog.rxcui, ndc: m.catalog.ndc ? " · NDC " + m.catalog.ndc : "" }))}</div>` : ""}
+     ${m.updatedByName ? `<div class="muted small">${esc(t("meds.lastChangedBy", { name: m.updatedByName }) + (m.updatedByRole === "caregiver" ? " " + t("meds.careTeamParen") : "") + (m.updatedAt ? " " + t("meds.onDate", { date: fmtDate(new Date(m.updatedAt)) }) : ""))}</div>` : ""}</div>
+     <div class="row spread" style="flex-wrap:nowrap"><div><strong>${esc(t("add.title"))}</strong><div class="muted small">${esc(t("meds.logActualHelp"))}</div></div><button class="btn-sm" data-act="log-additional" data-pid="${pid}" data-med="${m.id}">${esc(t("btn.log"))}</button></div>
+     ${!isCare() && !M.isPrn(m) ? `<div class="row spread" style="flex-wrap:nowrap"><div><strong>${esc(t("meds.addToCal"))}</strong><div class="muted small">${esc(t(m.addToCalendar ? (m.calendarEventIds?.length ? "meds.calOnDevice" : "meds.calOnFile") : "meds.calOff"))}</div></div>
+       <button class="btn-sm ${m.addToCalendar ? "" : "btn-primary"}" role="switch" aria-checked="${!!m.addToCalendar}" data-act="cal-toggle" data-med="${m.id}">${esc(t(m.addToCalendar ? "btn.turnOff" : "btn.turnOn"))}</button></div>` : ""}
      <div class="supply-grid">
-       <div><div class="eyebrow">${esc(cap(M.unitName(u)))} left</div><div class="big mono">${s.left != null ? M.fmtNum(s.left) : "–"}</div></div>
-       <div><div class="eyebrow">Per dose</div><div class="big mono">${M.fmtNum(s.perDose)}</div></div>
-       <div><div class="eyebrow">Days left</div><div class="big mono ${s.low ? "stock-low" : ""}">${s.daysLeft ?? "–"}</div></div>
+       <div><div class="eyebrow">${esc(t("supply.unitLeft", { unit: cap(M.unitName(u)) }))}</div><div class="big mono">${s.left != null ? M.fmtNum(s.left) : "–"}</div></div>
+       <div><div class="eyebrow">${esc(t("supply.perDose"))}</div><div class="big mono">${M.fmtNum(s.perDose)}</div></div>
+       <div><div class="eyebrow">${esc(t("supply.daysLeft"))}</div><div class="big mono ${s.low ? "stock-low" : ""}">${s.daysLeft ?? "–"}</div></div>
      </div>
      ${supplyBar(m, p.doses)}
-     <div>${runText} ${s.low ? `<span class="stock-low">Time to refill.</span>` : ""}</div>
-     ${st ? `<form class="stack" id="stockform"><div class="field"><label for="s-n">${st.mode === "refill" ? cap(M.unitName(u)) + " added" : cap(M.unitName(u)) + " you have now"}</label><input id="s-n" name="n" type="number" min="0" step="any" inputmode="decimal" required value="${st.mode === "refill" ? (m.fullCount || (u === "pills" ? 30 : 1)) : (s.left != null ? M.fmtNum(s.left) : "")}"></div>
-         <div class="field"><label for="s-note">Note (optional)</label><input id="s-note" name="note" placeholder="${st.mode === "refill" ? "e.g. CVS pickup, Rx #1234" : "e.g. Dropped two"}"></div>
-         <div class="row"><button class="btn-primary" type="submit">${st.mode === "refill" ? "Add refill" : "Save count"}</button><button type="button" data-act="stock-cancel">Cancel</button></div></form>`
-       : `<div class="row"><button class="btn-primary" data-act="stock-refill">Add refill</button><button data-act="stock-adjust">Correct count</button></div>`}
+     <div>${runText} ${s.low ? `<span class="stock-low">${esc(t("supply.timeToRefill"))}</span>` : ""}</div>
+     ${st ? `<form class="stack" id="stockform"><div class="field"><label for="s-n">${esc(t(st.mode === "refill" ? "supply.unitAdded" : "supply.unitHaveNow", { unit: cap(M.unitName(u)) }))}</label><input id="s-n" name="n" type="number" min="0" step="any" inputmode="decimal" required value="${st.mode === "refill" ? (m.fullCount || (u === "pills" ? 30 : 1)) : (s.left != null ? M.fmtNum(s.left) : "")}"></div>
+         <div class="field"><label for="s-note">${esc(t("supply.note"))}</label><input id="s-note" name="note" placeholder="${esc(t(st.mode === "refill" ? "supply.noteRefillPh" : "supply.noteAdjustPh"))}"></div>
+         <div class="row"><button class="btn-primary" type="submit">${esc(t(st.mode === "refill" ? "supply.addRefill" : "supply.saveCount"))}</button><button type="button" data-act="stock-cancel">${esc(t("btn.cancel"))}</button></div></form>`
+       : `<div class="row"><button class="btn-primary" data-act="stock-refill">${esc(t("supply.addRefill"))}</button><button data-act="stock-adjust">${esc(t("supply.correctCount"))}</button></div>`}
    </section>
-   <section class="stack"><h2>Supply history</h2>
-     ${log.length ? `<div class="list">` + log.map(e => `<div class="item"><div style="min-width:0"><strong>${esc(REASON[e.reason] || "Change")}</strong>${e.note ? ` <span class="muted">· ${esc(e.note)}</span>` : ""}
-       <div class="muted small">${fmtDate(new Date(e.at))} at ${fmtClock(e.at)}${e.byName ? " · " + esc(e.byName) : ""}${e.by === "caregiver" ? " (care team)" : ""}</div></div>
-       <div class="mono delta ${e.delta > 0 ? "plus" : ""}">${e.delta > 0 ? "+" : ""}${M.fmtNum(e.delta)}${e.after != null ? `<div class="muted small">${M.fmtNum(e.after)} left</div>` : ""}</div></div>`).join("") + `</div>`
-       : `<p class="muted">Every dose, refill and correction will be listed here.</p>`}
+   <section class="stack"><h2>${esc(t("supply.history"))}</h2>
+     ${log.length ? `<div class="list">` + log.map(e => `<div class="item"><div style="min-width:0"><strong>${esc(reasonLabel(e.reason))}</strong>${e.note ? ` <span class="muted">· ${esc(noteLabel(e.note))}</span>` : ""}
+       <div class="muted small">${esc(t("supply.dateAt", { date: fmtDate(new Date(e.at)), time: fmtClock(e.at) }))}${e.byName ? " · " + esc(e.byName) : ""}${e.by === "caregiver" ? " " + esc(t("meds.careTeamParen")) : ""}</div></div>
+       <div class="mono delta ${e.delta > 0 ? "plus" : ""}">${e.delta > 0 ? "+" : ""}${M.fmtNum(e.delta)}${e.after != null ? `<div class="muted small">${esc(t("supply.nLeft", { n: M.fmtNum(e.after) }))}</div>` : ""}</div></div>`).join("") + `</div>`
+       : `<p class="muted">${esc(t("supply.historyEmpty"))}</p>`}
    </section>`;
 }
-const FREQ = [["daily", "Every day"], ["weekdays", "Certain days of the week"], ["everyNDays", "Every few days"], ["everyNWeeks", "Every few weeks"], ["monthly", "Once a month"], ["prn", "As needed"]];
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const FREQ = ["daily", "weekdays", "everyNDays", "everyNWeeks", "monthly", "prn"];
 const opt = (v, label, sel) => `<option value="${v}" ${v === sel ? "selected" : ""}>${esc(label)}</option>`;
+const DRUG_CODES = ["ambiguous", "not-found", "offline", "limited", "short", "unavailable", "invite", "unmapped", "invalid", "denied", "module", "browser"];
 function drugMessage(code) {
-  return {
-    ambiguous: "More than one medicine matched. Choose the name, strength, and form on your package.",
-    "not-found": "Nothing in the NIH list matched. Try another spelling, or type the name and strength yourself.",
-    offline: "Couldn't reach the NIH drug list. Check your connection, or type the name and strength yourself.",
-    limited: "The drug list is busy. Wait a moment, or type the name yourself.",
-    short: "Type at least two letters.",
-    unavailable: "The drug list didn't answer. Type the name yourself.",
-    invite: "That is a PillAlly connection code, not a medicine package. Connection codes are used under Care team.",
-    unmapped: "This barcode is not an NDC package code. A store UPC is not a drug code. Type the medicine name, or the NDC printed on the package.",
-    invalid: "Those digits aren't a package code this app can read. Type the name or the NDC.",
-    denied: "Camera access is off. Type the numbers under the barcode, or search by name.",
-    module: "Android is downloading the on-device scanner. The photo is not uploaded. Try again in a moment, or type the numbers.",
-    browser: "Point the camera at the package barcode.",
-  }[code] || "";
+  return DRUG_CODES.includes(code) ? t("drug." + code) : "";
 }
 function drugChoices(list) {
-  return `<div class="list">${list.map((c, i) => `<button type="button" class="item item-btn" data-act="drug-pick" data-i="${i}"><div class="stack-tight"><strong>${esc(c.name)}</strong><span class="muted small">${esc(c.strength || "Strength not stated")} · ${c.tty === "SBD" ? "Brand" : "Generic"} · RxNorm ${esc(c.rxcui)}</span></div></button>`).join("")}</div>`;
+  return `<div class="list">${list.map((c, i) => `<button type="button" class="item item-btn" data-act="drug-pick" data-i="${i}"><div class="stack-tight"><strong>${esc(c.name)}</strong><span class="muted small">${esc(c.strength || t("drug.noStrength"))} · ${esc(t(c.tty === "SBD" ? "drug.brand" : "drug.generic"))} · RxNorm ${esc(c.rxcui)}</span></div></button>`).join("")}</div>`;
 }
 function drugPanel() {
   const d = S.drug;
   if (!d) return "";
-  if (d.step === "camera") return `<div class="sheet stack"><video id="pkg-video" playsinline autoplay muted style="width:100%;max-height:240px;border-radius:12px;background:#000"></video><p class="muted">Point at the package barcode. This does not scan a connection code. The picture stays on this phone.</p><button type="button" data-act="drug-close">Cancel</button></div>`;
+  if (d.step === "camera") return `<div class="sheet stack"><video id="pkg-video" playsinline autoplay muted style="width:100%;max-height:240px;border-radius:12px;background:#000"></video><p class="muted">${esc(t("drug.cameraHelp"))}</p><button type="button" data-act="drug-close">${esc(t("btn.cancel"))}</button></div>`;
   if (d.step === "review" && d.choice) {
     const c = d.choice;
-    return `<div class="sheet stack"><h3>Check this package</h3><p><strong>${esc(c.name)}</strong></p><p>Strength printed for this product: <strong>${esc(c.strength || "not stated")}</strong></p><p class="muted small">${c.tty === "SBD" ? "Brand" : "Generic"} · RxNorm ${esc(c.rxcui)}${c.ndc ? " · NDC " + esc(c.ndc) : ""}</p><p class="muted">Using this fills the name and that strength text only. It does not set how much you take, how often, or convert mg, mL, and units.</p><div class="row"><button type="button" class="btn-primary" data-act="drug-use">Use this name</button><button type="button" data-act="drug-back">Back</button></div></div>`;
+    return `<div class="sheet stack"><h3>${esc(t("drug.check"))}</h3><p><strong>${esc(c.name)}</strong></p><p>${esc(t("drug.strengthPrinted"))} <strong>${esc(c.strength || t("drug.notStated"))}</strong></p><p class="muted small">${esc(t(c.tty === "SBD" ? "drug.brand" : "drug.generic"))} · RxNorm ${esc(c.rxcui)}${c.ndc ? " · NDC " + esc(c.ndc) : ""}</p><p class="muted">${esc(t("drug.useHelp"))}</p><div class="row"><button type="button" class="btn-primary" data-act="drug-use">${esc(t("drug.use"))}</button><button type="button" data-act="drug-back">${esc(t("btn.back"))}</button></div></div>`;
   }
-  if (d.step === "code" || d.step === "results") return `<div class="sheet stack"><div class="field"><label for="drug-code">Numbers under the barcode</label><input id="drug-code" value="${esc(d.code || "")}" autocomplete="off"></div>${d.message ? `<p>${esc(d.message)}</p>` : ""}${d.choices?.length ? drugChoices(d.choices) : ""}<div class="row"><button type="button" class="btn-primary" data-act="drug-code-go">Look up</button><button type="button" data-act="drug-open">Search by name</button><button type="button" data-act="drug-close">Close</button></div></div>`;
-  return `<div class="sheet stack"><div class="field"><label for="drug-q">Drug name</label><input id="drug-q" value="${esc(d.query || "")}" placeholder="e.g. lisinopril"></div><p class="muted small">${esc(CATALOG_NOTICE)}</p>${d.message ? `<p>${esc(d.message)}</p>` : ""}${d.choices?.length ? drugChoices(d.choices) : ""}<div class="row"><button type="button" class="btn-primary" data-act="drug-search">Search</button><button type="button" data-act="drug-close">Close</button></div></div>`;
+  if (d.step === "code" || d.step === "results") return `<div class="sheet stack"><div class="field"><label for="drug-code">${esc(t("drug.codeLabel"))}</label><input id="drug-code" value="${esc(d.code || "")}" autocomplete="off"></div>${d.message ? `<p>${esc(d.message)}</p>` : ""}${d.choices?.length ? drugChoices(d.choices) : ""}<div class="row"><button type="button" class="btn-primary" data-act="drug-code-go">${esc(t("drug.lookUp"))}</button><button type="button" data-act="drug-open">${esc(t("drug.byName"))}</button><button type="button" data-act="drug-close">${esc(t("btn.close"))}</button></div></div>`;
+  return `<div class="sheet stack"><div class="field"><label for="drug-q">${esc(t("drug.name"))}</label><input id="drug-q" value="${esc(d.query || "")}" placeholder="${esc(t("drug.namePh"))}"></div><p class="muted small">${esc(t("drug.notice"))}</p>${d.message ? `<p>${esc(d.message)}</p>` : ""}${d.choices?.length ? drugChoices(d.choices) : ""}<div class="row"><button type="button" class="btn-primary" data-act="drug-search">${esc(t("drug.search"))}</button><button type="button" data-act="drug-close">${esc(t("btn.close"))}</button></div></div>`;
 }
 async function lookupCode(text) {
-  S.drug = { step: "code", code: text, message: "Looking up…", choices: [] };
+  S.drug = { step: "code", code: text, message: t("drug.lookingUp"), choices: [] };
   render();
   const res = await lookupPackageCode(text);
   if (!S.drug) return;
@@ -453,84 +455,85 @@ async function lookupCode(text) {
 async function beginPackageScan() {
   readForm();
   const support = N.packageScanSupport();
-  if (support === "manual") { S.drug = { step: "code", message: "This browser can't open a camera scanner. Type the numbers under the barcode, or search by name.", choices: [] }; return; }
+  if (support === "manual") { S.drug = { step: "code", message: t("drug.noCamera"), choices: [] }; return; }
   if (support === "browser") {
     S.drug = { step: "camera", message: "" };
     render();
     const video = document.getElementById("pkg-video");
     const res = video ? await N.startBrowserScan(video) : { ok: false, code: "unavailable" };
     if (!S.drug || S.drug.step !== "camera") return;
-    if (!res.ok) { if (res.code !== "cancelled") S.drug = { step: "code", message: drugMessage(res.code) || "Couldn't scan. Type the numbers instead.", choices: [] }; else S.drug = null; return; }
+    if (!res.ok) { if (res.code !== "cancelled") S.drug = { step: "code", message: drugMessage(res.code) || t("drug.couldntScan"), choices: [] }; else S.drug = null; return; }
     await lookupCode(res.text);
     return;
   }
   const res = await N.scanPackageBarcode();
   if (!S.editing) return;
-  if (!res.ok) { if (res.code !== "cancelled") S.drug = { step: "code", message: drugMessage(res.code) || "Couldn't scan. Type the numbers instead.", choices: [] }; return; }
+  if (!res.ok) { if (res.code !== "cancelled") S.drug = { step: "code", message: drugMessage(res.code) || t("drug.couldntScan"), choices: [] }; return; }
   await lookupCode(res.text);
 }
 function medForm() {
   const m = S.editing, T = M.TYPES[m.type], sc = m.schedule, pill = m.type === "pill", u = m.supplyUnit;
   const container = M.CONTAINERS.includes(u), everyN = sc.kind === "everyNDays" || sc.kind === "everyNWeeks";
-  const fixedToggle = `<label class="opt"><input type="checkbox" name="fixed" ${sc.fixed ? "checked" : ""}><span>Keep fixed schedule</span></label><div class="muted">${sc.fixed ? "Always on the set days and times, however late a dose is taken." : "The next dose is due one interval after the last one was actually taken (taken Tuesday 9:30 AM → next due a week later at 9:30 AM). Until the first dose, the set days and times are used."}</div>`;
+  const fixedToggle = `<label class="opt"><input type="checkbox" name="fixed" ${sc.fixed ? "checked" : ""}><span>${esc(t("form.fixed"))}</span></label><div class="muted">${esc(t(sc.fixed ? "form.fixedOn" : "form.fixedOff"))}</div>`;
   let freq = "";
-  if (sc.kind === "weekdays") freq = `<div class="opts" role="group" aria-label="Days of the week">${WEEKDAYS.map((d, i) => `<label class="opt"><input type="checkbox" name="days" value="${i}" ${(sc.days || []).map(Number).includes(i) ? "checked" : ""}><span>${d}</span></label>`).join("")}</div>`;
-  else if (everyN) freq = `<div class="amount"><span>Every</span><input name="n" type="number" min="1" max="365" inputmode="numeric" required value="${sc.n || 2}" aria-label="Repeat every"><span>${sc.kind === "everyNDays" ? "days" : "weeks"}</span></div><div class="muted">Counts from the start date.</div>${fixedToggle}`;
-  else if (sc.kind === "monthly") freq = `<div class="amount"><span>On day</span><input name="dayOfMonth" type="number" min="1" max="31" inputmode="numeric" required value="${sc.dayOfMonth || (m.start ? M.parseDay(m.start).getDate() : new Date().getDate())}" aria-label="Day of the month"><span>of each month</span></div><div class="muted">In shorter months, the last day.</div>${fixedToggle}`;
-  else if (sc.kind === "prn") freq = `<div class="muted">No reminders or missed-dose alerts. Log a treatment on the Today screen when it happens.</div>`;
-  return `<form class="sheet stack" id="medform"><h2>${m.isNew ? "Add medicine" : "Edit medicine"}</h2>
+  if (sc.kind === "weekdays") freq = `<div class="opts" role="group" aria-label="${esc(t("form.daysOfWeek"))}">${[0, 1, 2, 3, 4, 5, 6].map(i => `<label class="opt"><input type="checkbox" name="days" value="${i}" ${(sc.days || []).map(Number).includes(i) ? "checked" : ""}><span>${esc(weekdayShort(i))}</span></label>`).join("")}</div>`;
+  else if (everyN) freq = `<div class="amount"><span>${esc(t("form.every"))}</span><input name="n" type="number" min="1" max="365" inputmode="numeric" required value="${sc.n || 2}" aria-label="${esc(t("form.repeatEvery"))}"><span>${esc(t(sc.kind === "everyNDays" ? "form.days" : "form.weeks"))}</span></div><div class="muted">${esc(t("form.countsFromStart"))}</div>${fixedToggle}`;
+  else if (sc.kind === "monthly") freq = `<div class="amount"><span>${esc(t("form.onDay"))}</span><input name="dayOfMonth" type="number" min="1" max="31" inputmode="numeric" required value="${sc.dayOfMonth || (m.start ? M.parseDay(m.start).getDate() : new Date().getDate())}" aria-label="${esc(t("form.dayOfMonth"))}"><span>${esc(t("form.ofEachMonth"))}</span></div><div class="muted">${esc(t("form.shortMonths"))}</div>${fixedToggle}`;
+  else if (sc.kind === "prn") freq = `<div class="muted">${esc(t("form.prnHelp"))}</div>`;
+  return `<form class="sheet stack" id="medform"><h2>${esc(t(m.isNew ? "meds.add" : "meds.edit"))}</h2>
    ${drugPanel()}
-   <div class="row"><button type="button" data-act="drug-open">Search drug list</button><button type="button" data-act="drug-scan">Scan package</button></div>
-   <p class="muted small">${esc(CATALOG_NOTICE)}</p>
-   <div class="field"><label for="f-name">Name</label><input id="f-name" name="name" required value="${esc(m.name)}" placeholder="e.g. Amoxicillin"></div>
-   <fieldset class="field"><legend>Type</legend><div class="opts">${Object.entries(M.TYPES).map(([k, t]) => `<label class="opt"><input type="radio" name="type" value="${k}" data-live ${m.type === k ? "checked" : ""}><span><span aria-hidden="true">${t.icon}</span> ${esc(t.label)}</span></label>`).join("")}</div></fieldset>
-   <div class="${pill ? "grid2" : "stack"}"><div class="field"><label for="f-strength">Strength (optional)</label><input id="f-strength" name="strength" value="${esc(m.strength)}" placeholder="${pill ? "e.g. 250 mg" : "e.g. 100 units/mL"}"></div>
-   <div class="field"><label for="f-dose">Each dose</label><div class="amount"><input id="f-dose" name="doseAmount" type="number" min="0" step="any" inputmode="decimal" required value="${M.fmtNum(m.doseAmount)}">${pill ? `<span>pills</span>` : `<select name="doseUnit" aria-label="Dose unit">${T.doseUnits.map(x => opt(x, x === "units" ? "units (IU)" : x, m.doseUnit)).join("")}</select>`}</div></div></div>
-   <div class="field"><label for="f-freq">How often</label><select id="f-freq" name="freq" data-live>${FREQ.map(([k, l]) => opt(k, l, sc.kind)).join("")}</select>${freq}</div>
-   ${sc.kind !== "prn" ? `<div class="field"><label>Times of day</label><div class="times" id="f-times">${(m.times || []).map((t, i) => `<span class="t"><input type="time" id="f-time-${i}" value="${t}" aria-label="Dose time ${i + 1}"><button type="button" class="btn-quiet btn-sm" data-act="rmtime" data-i="${i}" aria-label="Remove time">✕</button></span>`).join("")}
-     <button type="button" class="btn-sm" data-act="addtime">Add time</button></div></div>` : ""}
-   ${!isCare() && sc.kind !== "prn" ? `<label class="opt"><input type="checkbox" name="addToCalendar" ${m.addToCalendar ? "checked" : ""}><span>📅 Add to my calendar</span></label>` : ""}
-   <div class="grid2"><div class="field"><label for="f-start">Start date</label><input id="f-start" name="start" type="date" ${everyN ? "required" : ""} value="${esc(m.start || "")}"></div>
-   <div class="field"><label for="f-end">End date (optional)</label><input id="f-end" name="end" type="date" value="${esc(m.end || "")}"></div></div>
-   <h3>Supply</h3>
-   ${pill ? "" : `<div class="grid2"><div class="field"><label for="f-unit">Counted in</label><select id="f-unit" name="supplyUnit" data-live>${T.supplyUnits.map(x => opt(x, x, u)).join("")}</select></div>
-     ${container ? `<div class="field"><label for="f-per">Doses per ${M.unitName(u, 1)} (optional)</label><input id="f-per" name="perContainer" type="number" min="1" step="any" inputmode="decimal" value="${m.perContainer ?? ""}" placeholder="1"></div>` : "<div></div>"}</div>`}
-   <div class="grid2"><div class="field"><label for="f-full">${esc(cap(M.unitName(u)))} in a full refill</label><input id="f-full" name="fullCount" type="number" min="0" step="any" inputmode="decimal" value="${m.fullCount ?? ""}" placeholder="${pill ? "e.g. 30" : "e.g. 4"}"></div>
-   ${m.isNew ? `<div class="field"><label for="f-stock">${esc(cap(M.unitName(u)))} you have now</label><input id="f-stock" name="stock" type="number" min="0" step="any" inputmode="decimal" value="${m.stock ?? ""}"></div>` : "<div></div>"}</div>
-   ${m.isNew ? "" : `<div class="muted">To change the count, use Add refill or Correct count on the medicine's page, so the history stays right.</div>`}
-   <div class="grid2"><div class="field"><label for="f-refilld">Warn when this many days are left</label><input id="f-refilld" name="refillDays" type="number" min="0" inputmode="numeric" value="${m.refillDays ?? 7}"></div>
-   <div class="field"><label for="f-refill">Or this many ${esc(M.unitName(u))}</label><input id="f-refill" name="refillAt" type="number" min="0" step="any" inputmode="decimal" value="${m.refillAt ?? (pill ? 5 : 1)}"></div></div>
-   <div class="field"><label for="f-rx">Prescribed by (optional)</label><input id="f-rx" name="prescribedBy" value="${esc(m.prescribedBy || "")}" placeholder="e.g. Dr. Patel"></div>
-   ${pill || m.type === "other" ? `<div class="field"><label for="f-slot">Pillbox compartment</label><select id="f-slot" name="slot"><option value="">None</option>${[1, 2, 3, 4, 5, 6, 7, 8].map(n => `<option value="${n}" ${Number(m.slot) === n ? "selected" : ""}>${n}</option>`).join("")}</select></div>` : ""}
-   <div class="field"><label for="f-notes">Notes</label><input id="f-notes" name="notes" value="${esc(m.notes)}" placeholder="${pill ? "e.g. Take with food" : "e.g. Rotate injection site"}"></div>
-   <div class="row spread"><div class="row"><button class="btn-primary" type="submit">Save</button><button type="button" data-act="cancel">Cancel</button></div>${!m.isNew ? `<button type="button" class="btn-danger btn-sm" data-act="delete">${m.confirmDelete ? "Tap again to delete" : "Delete"}</button>` : ""}</div>
+   <div class="row"><button type="button" data-act="drug-open">${esc(t("drug.searchList"))}</button><button type="button" data-act="drug-scan">${esc(t("drug.scan"))}</button></div>
+   <p class="muted small">${esc(t("drug.notice"))}</p>
+   <div class="field"><label for="f-name">${esc(t("form.name"))}</label><input id="f-name" name="name" required value="${esc(m.name)}" placeholder="${esc(t("form.namePh"))}"></div>
+   <fieldset class="field"><legend>${esc(t("form.type"))}</legend><div class="opts">${Object.entries(M.TYPES).map(([k, ty]) => `<label class="opt"><input type="radio" name="type" value="${k}" data-live ${m.type === k ? "checked" : ""}><span><span aria-hidden="true">${ty.icon}</span> ${esc(M.typeLabel(k))}</span></label>`).join("")}</div></fieldset>
+   <div class="${pill ? "grid2" : "stack"}"><div class="field"><label for="f-strength">${esc(t("form.strength"))}</label><input id="f-strength" name="strength" value="${esc(m.strength)}" placeholder="${esc(t(pill ? "form.strengthPhPill" : "form.strengthPh"))}"></div>
+   <div class="field"><label for="f-dose">${esc(t("form.eachDose"))}</label><div class="amount"><input id="f-dose" name="doseAmount" type="number" min="0" step="any" inputmode="decimal" required value="${M.fmtNum(m.doseAmount)}">${pill ? `<span>${esc(M.unitName("pills"))}</span>` : `<select name="doseUnit" aria-label="${esc(t("form.doseUnit"))}">${T.doseUnits.map(x => opt(x, unitOption(x), m.doseUnit)).join("")}</select>`}</div></div></div>
+   <div class="field"><label for="f-freq">${esc(t("form.howOften"))}</label><select id="f-freq" name="freq" data-live>${FREQ.map(k => opt(k, t("freq." + k), sc.kind)).join("")}</select>${freq}</div>
+   ${sc.kind !== "prn" ? `<div class="field"><label>${esc(t("form.times"))}</label><div class="times" id="f-times">${(m.times || []).map((tm, i) => `<span class="t"><input type="time" id="f-time-${i}" value="${tm}" aria-label="${esc(t("form.doseTimeN", { n: i + 1 }))}"><button type="button" class="btn-quiet btn-sm" data-act="rmtime" data-i="${i}" aria-label="${esc(t("form.removeTime"))}">✕</button></span>`).join("")}
+     <button type="button" class="btn-sm" data-act="addtime">${esc(t("form.addTime"))}</button></div></div>` : ""}
+   ${!isCare() && sc.kind !== "prn" ? `<label class="opt"><input type="checkbox" name="addToCalendar" ${m.addToCalendar ? "checked" : ""}><span>📅 ${esc(t("meds.addToCal"))}</span></label>` : ""}
+   <div class="grid2"><div class="field"><label for="f-start">${esc(t("form.start"))}</label><input id="f-start" name="start" type="date" ${everyN ? "required" : ""} value="${esc(m.start || "")}"></div>
+   <div class="field"><label for="f-end">${esc(t("form.end"))}</label><input id="f-end" name="end" type="date" value="${esc(m.end || "")}"></div></div>
+   <h3>${esc(t("form.supply"))}</h3>
+   ${pill ? "" : `<div class="grid2"><div class="field"><label for="f-unit">${esc(t("form.countedIn"))}</label><select id="f-unit" name="supplyUnit" data-live>${T.supplyUnits.map(x => opt(x, M.unitName(x), u)).join("")}</select></div>
+     ${container ? `<div class="field"><label for="f-per">${esc(t("form.dosesPer", { unit: M.unitName(u, 1) }))}</label><input id="f-per" name="perContainer" type="number" min="1" step="any" inputmode="decimal" value="${m.perContainer ?? ""}" placeholder="1"></div>` : "<div></div>"}</div>`}
+   <div class="grid2"><div class="field"><label for="f-full">${esc(t("form.fullRefill", { unit: cap(M.unitName(u)) }))}</label><input id="f-full" name="fullCount" type="number" min="0" step="any" inputmode="decimal" value="${m.fullCount ?? ""}" placeholder="${esc(t("form.eg", { x: pill ? 30 : 4 }))}"></div>
+   ${m.isNew ? `<div class="field"><label for="f-stock">${esc(t("supply.unitHaveNow", { unit: cap(M.unitName(u)) }))}</label><input id="f-stock" name="stock" type="number" min="0" step="any" inputmode="decimal" value="${m.stock ?? ""}"></div>` : "<div></div>"}</div>
+   ${m.isNew ? "" : `<div class="muted">${esc(t("form.countHelp"))}</div>`}
+   <div class="grid2"><div class="field"><label for="f-refilld">${esc(t("form.warnDays"))}</label><input id="f-refilld" name="refillDays" type="number" min="0" inputmode="numeric" value="${m.refillDays ?? 7}"></div>
+   <div class="field"><label for="f-refill">${esc(t("form.warnCount", { unit: M.unitName(u) }))}</label><input id="f-refill" name="refillAt" type="number" min="0" step="any" inputmode="decimal" value="${m.refillAt ?? (pill ? 5 : 1)}"></div></div>
+   <div class="field"><label for="f-rx">${esc(t("form.prescribedBy"))}</label><input id="f-rx" name="prescribedBy" value="${esc(m.prescribedBy || "")}" placeholder="${esc(t("form.prescribedByPh"))}"></div>
+   ${pill || m.type === "other" ? `<div class="field"><label for="f-slot">${esc(t("form.slot"))}</label><select id="f-slot" name="slot"><option value="">${esc(t("form.none"))}</option>${[1, 2, 3, 4, 5, 6, 7, 8].map(n => `<option value="${n}" ${Number(m.slot) === n ? "selected" : ""}>${n}</option>`).join("")}</select></div>` : ""}
+   <div class="field"><label for="f-notes">${esc(t("form.notes"))}</label><input id="f-notes" name="notes" value="${esc(m.notes)}" placeholder="${esc(t(pill ? "form.notesPhPill" : "form.notesPh"))}"></div>
+   <div class="row spread"><div class="row"><button class="btn-primary" type="submit">${esc(t("btn.save"))}</button><button type="button" data-act="cancel">${esc(t("btn.cancel"))}</button></div>${!m.isNew ? `<button type="button" class="btn-danger btn-sm" data-act="delete">${esc(t(m.confirmDelete ? "btn.tapAgainDelete" : "btn.delete"))}</button>` : ""}</div>
   </form>`;
 }
 
 function remindersCard() {
-  const label = { granted: "On", denied: "Blocked. Turn them on in Android settings.", default: "Not set up yet", prompt: "Not set up yet", "prompt-with-rationale": "Not set up yet", unsupported: "Not available in this browser" }[S.perm] || S.perm;
-  return `<div class="row spread"><div><strong>${isCare() ? "Missed-dose alerts" : "Dose alarms"}</strong><div class="muted">${esc(label)}</div></div>${S.perm === "granted" ? "" : `<button class="btn-sm btn-primary" data-act="perm">Turn on</button>`}</div>`;
+  const key = { granted: "perm.on", denied: "perm.blocked", default: "perm.notSet", prompt: "perm.notSet", "prompt-with-rationale": "perm.notSet", unsupported: "perm.unsupported" }[S.perm];
+  const label = key ? t(key) : S.perm;
+  return `<div class="row spread"><div><strong>${esc(t(isCare() ? "perm.careTitle" : "perm.title"))}</strong><div class="muted">${esc(label)}</div></div>${S.perm === "granted" ? "" : `<button class="btn-sm btn-primary" data-act="perm">${esc(t("btn.turnOn"))}</button>`}</div>`;
 }
 function accountCard() {
-  if (S.store.mode !== "cloud") return `<div class="row spread"><div><strong>Sync</strong><div class="muted">Off. Data stays on this phone until sync is set up.</div></div></div>`;
-  return `<div class="row spread"><div><strong>${esc(S.user.name)}</strong><div class="muted">${esc(S.user.email || "")}</div></div><button class="btn-sm" data-act="signout">Sign out</button></div>`;
+  if (S.store.mode !== "cloud") return `<div class="row spread"><div><strong>${esc(t("acct.sync"))}</strong><div class="muted">${esc(t("acct.syncOff"))}</div></div></div>`;
+  return `<div class="row spread"><div><strong>${esc(S.user.name)}</strong><div class="muted">${esc(S.user.email || "")}</div></div><button class="btn-sm" data-act="signout">${esc(t("acct.signOut"))}</button></div>`;
 }
 
 // ---------------- patient app ----------------
 function patientView() {
   const pid = S.pid, p = snap(pid), now = new Date();
   switch (S.view) {
-    case "calendar": return header("Calendar", "Your doses by day") + `<div class="stack">${viewSwitch()}${calendarBlock(pid)}</div>`;
-    case "meds": return header("Medicines", p.meds.length + " on your list") + `<div class="stack">${viewSwitch()}${exampleBanner()}${medsBlock(pid)}</div>`;
-    case "more": return header("More", "Pillbox, care team and settings") + `<div class="stack">${viewSwitch()}${legacyBanner()}
+    case "calendar": return header(t("nav.calendar"), t("cal.sub")) + `<div class="stack">${viewSwitch()}${calendarBlock(pid)}</div>`;
+    case "meds": return header(t("nav.meds"), t("meds.onList", { n: p.meds.length })) + `<div class="stack">${viewSwitch()}${exampleBanner()}${medsBlock(pid)}</div>`;
+    case "more": return header(t("nav.more"), t("more.sub")) + `<div class="stack">${viewSwitch()}${legacyBanner()}
       ${careTeamBlock(pid, p)}
-      <section class="sheet stack"><h2>Pillbox</h2>
-        <div class="row spread"><div><strong>Bluetooth pillbox</strong><div class="muted">${esc(S.ble)}</div></div><button class="btn-sm btn-primary" data-act="ble">Connect</button></div>
-        <p class="muted">No pillbox yet? Tap a compartment to test what happens when its lid opens.</p>
-        ${p.meds.filter(m => m.slot).length ? `<div class="pack">` + p.meds.filter(m => m.slot).sort((a, b) => a.slot - b.slot).map(m => `<button class="well" data-act="sim" data-slot="${m.slot}"><span class="time">Compartment ${esc(m.slot)}</span><span class="name">${esc(m.name)}</span><span class="dose">Open lid</span></button>`).join("") + `</div>` : `<p class="muted">Assign a compartment to a medicine first.</p>`}
+      <section class="sheet stack"><h2>${esc(t("box.title"))}</h2>
+        <div class="row spread"><div><strong>${esc(t("box.ble"))}</strong><div class="muted">${esc(S.ble || t("ble.notConnected"))}</div></div><button class="btn-sm btn-primary" data-act="ble">${esc(t("btn.connect"))}</button></div>
+        <p class="muted">${esc(t("box.test"))}</p>
+        ${p.meds.filter(m => m.slot).length ? `<div class="pack">` + p.meds.filter(m => m.slot).sort((a, b) => a.slot - b.slot).map(m => `<button class="well" data-act="sim" data-slot="${m.slot}"><span class="time">${esc(t("box.slot", { n: m.slot }))}</span><span class="name">${esc(m.name)}</span><span class="dose">${esc(t("box.openLid"))}</span></button>`).join("") + `</div>` : `<p class="muted">${esc(t("box.assignFirst"))}</p>`}
       </section>
-      <section class="sheet stack"><h2>Settings</h2>${settingsExtras()}${remindersCard()}${accountCard()}</section></div>`;
-    default: return header("Today", now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })) + `<div class="stack">${viewSwitch()}${legacyBanner()}${alertBanner()}${exampleBanner()}${todayBlock(pid)}</div>`;
+      <section class="sheet stack"><h2>${esc(t("nav.settings"))}</h2>${languageCard()}${settingsExtras()}${remindersCard()}${accountCard()}</section></div>`;
+    default: return header(t("nav.today"), longDate(now)) + `<div class="stack">${viewSwitch()}${legacyBanner()}${alertBanner()}${exampleBanner()}${todayBlock(pid)}</div>`;
   }
 }
 
@@ -539,11 +542,14 @@ function accessRows(p) {
   if (!ids.length) return "";
   return `<div class="list">${ids.map(c => {
     const entry = (p.access || {})[c];
-    const name = entry?.name || (p.caregiverNames || {})[c] || "Caregiver";
-    const perm = PERMISSIONS[entry?.permission] || (entry ? entry.permission : "Linked");
-    return `<div class="item"><div><strong>${esc(name)}</strong><div class="muted small">${esc(perm)}</div></div><button class="btn-sm btn-danger" data-act="unlink" data-uid="${c}">Remove</button></div>`;
+    const name = entry?.name || (p.caregiverNames || {})[c] || t("common.caregiverCap");
+    const perm = permLabel(entry?.permission) || (entry ? entry.permission : t("care.linked"));
+    return `<div class="item"><div><strong>${esc(name)}</strong><div class="muted small">${esc(perm)}</div></div><button class="btn-sm btn-danger" data-act="unlink" data-uid="${c}">${esc(t("btn.remove"))}</button></div>`;
   }).join("")}</div>`;
 }
+const permLabel = k => (PERMISSIONS[k] ? t("perm." + k) : "");
+// The cloud and local stores describe sync in English; show the current language for the two known states.
+const syncText = st => st.mode === "cloud" || st.mode === "phone" ? { title: t("sync." + st.mode + ".title"), detail: t("sync." + st.mode + ".detail") } : st;
 function qrBlock(payload) {
   if (!payload || !String(payload).startsWith("pillbox:invite:v1:")) return "";
   try {
@@ -552,115 +558,124 @@ function qrBlock(payload) {
   } catch (e) { return ""; }
 }
 function careTeamBlock(pid, p) {
-  const status = syncStatus(S.store);
+  const status = syncText(syncStatus(S.store));
   const linked = accessRows(p);
   let invite = "";
   if (S.store.mode === "cloud" && S.invite?.inviteCode) {
     const exp = new Date(S.invite.expiresAt);
     invite = `${qrBlock(S.invite.payload)}<div class="code">${esc(S.invite.inviteCode)}</div>
-      <p>This connects someone to <strong>${esc(S.invite.patientName || p.name || "you")}</strong> as <strong>${esc(S.invite.permissionLabel || "")}</strong>. It expires ${esc(exp.toLocaleString())}. The code has no medicines or health details. It works once.</p>
-      <button class="btn-sm" data-act="invite-clear">Done</button>`;
+      <p>${t("care.inviteText", { name: `<strong>${esc(S.invite.patientName || p.name || t("care.you"))}</strong>`, perm: `<strong>${esc(permLabel(S.invite.permission) || S.invite.permissionLabel || "")}</strong>`, date: esc(fmtDateTimeL(exp)) })}</p>
+      <button class="btn-sm" data-act="invite-clear">${esc(t("btn.done"))}</button>`;
   } else if (S.store.mode === "cloud") {
-    invite = `<p>Choose what they can do, then share the code. They will see your name before it connects. You can remove them later.</p>
-      <div class="row"><button class="btn-primary" data-act="invite-perm" data-perm="read">View only</button><button data-act="invite-perm" data-perm="logEdit">Can log and edit</button></div>`;
+    invite = `<p>${esc(t("care.inviteHelp"))}</p>
+      <div class="row"><button class="btn-primary" data-act="invite-perm" data-perm="read">${esc(t("perm.read"))}</button><button data-act="invite-perm" data-perm="logEdit">${esc(t("perm.logEdit"))}</button></div>`;
   }
-  return `<section class="sheet stack"><h2>Care team</h2><div class="banner info"><div><strong>${esc(status.title)}</strong> ${esc(status.detail)}</div></div>
+  return `<section class="sheet stack"><h2>${esc(t("care.title"))}</h2><div class="banner info"><div><strong>${esc(status.title)}</strong> ${esc(status.detail)}</div></div>
     ${linked}${invite}</section>`;
+}
+// Language is a setting of this phone (localStorage), like the body figure. "Automatic" follows the phone's language.
+function languageCard() {
+  const pref = readLangPref();
+  return `<div class="stack-tight"><strong id="lang-l">${esc(t("lang.title"))}</strong>
+    <div class="muted small">${esc(t("lang.help"))}</div>
+    <div class="row" role="group" aria-labelledby="lang-l">${LANG_CHOICES.map(v => `<button type="button" class="btn-sm ${pref === v ? "btn-primary" : ""}" data-act="lang" data-v="${v}" aria-pressed="${pref === v}" ${v === "auto" ? "" : `lang="${v}"`}>${esc(t("lang." + v))}</button>`).join("")}</div></div>`;
 }
 function settingsExtras() {
   const p = S.profile || {};
-  const rec = p.recommended === "yes" ? "Yes" : p.recommended === "no" ? "No" : p.recommended === "skip" ? "Skipped" : "Not answered";
-  return `<div class="stack-tight"><strong>How you use ${esc(productName())}</strong>
-    <div class="muted small">This only changes the screens on this phone. It does not grant access to anyone's medicines.</div>
-    <div class="row"><button class="btn-sm ${p.usePatient ? "btn-primary" : ""}" data-act="role-toggle" data-mode="patient" aria-pressed="${!!p.usePatient}">I take medicines</button>
-    <button class="btn-sm ${p.useCaregiver ? "btn-primary" : ""}" data-act="role-toggle" data-mode="caregiver" aria-pressed="${!!p.useCaregiver}">I help someone</button></div>
-    <div class="muted small">Healthcare professional recommended this app? ${esc(rec)}. That answer is not used for access and is not a medical recommendation.</div>
-    <strong>Body figure</strong>
-    <div class="muted small">Male or female outline when you log where something happened. Saved events keep the same places either way. People you help do not have their own figure, so this phone's choice is used for them too.</div>
-    <div class="row"><button type="button" class="btn-sm ${bodyFigure() === "male" ? "btn-primary" : ""}" data-act="body-figure" data-v="male" aria-pressed="${bodyFigure() === "male"}">Male</button><button type="button" class="btn-sm ${bodyFigure() === "female" ? "btn-primary" : ""}" data-act="body-figure" data-v="female" aria-pressed="${bodyFigure() === "female"}">Female</button></div>
-    <div class="row"><button class="btn-sm" data-act="export-backup">Export backup</button><button class="btn-sm" data-act="import-backup">Import backup</button></div>
-    <div class="muted small">A backup is a file you keep. Importing it on this phone does not link another person.</div></div>`;
+  const rec = t(p.recommended === "yes" ? "rec.yes" : p.recommended === "no" ? "rec.no" : p.recommended === "skip" ? "rec.skipped" : "rec.none");
+  return `<div class="stack-tight"><strong>${esc(t("set.howYouUse", { app: productName() }))}</strong>
+    <div class="muted small">${esc(t("set.howHelp"))}</div>
+    <div class="row"><button class="btn-sm ${p.usePatient ? "btn-primary" : ""}" data-act="role-toggle" data-mode="patient" aria-pressed="${!!p.usePatient}">${esc(t("role.patient"))}</button>
+    <button class="btn-sm ${p.useCaregiver ? "btn-primary" : ""}" data-act="role-toggle" data-mode="caregiver" aria-pressed="${!!p.useCaregiver}">${esc(t("role.helpShort"))}</button></div>
+    <div class="muted small">${esc(t("set.recommended", { answer: rec }))}</div>
+    <strong>${esc(t("set.figure"))}</strong>
+    <div class="muted small">${esc(t("set.figureHelp"))}</div>
+    <div class="row"><button type="button" class="btn-sm ${bodyFigure() === "male" ? "btn-primary" : ""}" data-act="body-figure" data-v="male" aria-pressed="${bodyFigure() === "male"}">${esc(t("set.male"))}</button><button type="button" class="btn-sm ${bodyFigure() === "female" ? "btn-primary" : ""}" data-act="body-figure" data-v="female" aria-pressed="${bodyFigure() === "female"}">${esc(t("set.female"))}</button></div>
+    <div class="row"><button class="btn-sm" data-act="export-backup">${esc(t("set.export"))}</button><button class="btn-sm" data-act="import-backup">${esc(t("set.import"))}</button></div>
+    <div class="muted small">${esc(t("set.backupHelp"))}</div></div>`;
 }
 
 // ---------------- caregiver app ----------------
 function caregiverView() {
-  if (S.view === "settings") return header("Settings", "People you help") + `<div class="stack">${viewSwitch()}${legacyBanner()}<section class="sheet stack">${settingsExtras()}${remindersCard()}${accountCard()}</section></div>`;
-  if (S.view === "link") return header("Connect", "With a code they give you") + `<div class="stack">${viewSwitch()}${legacyBanner()}${joinBlock()}</div>`;
+  if (S.view === "settings") return header(t("nav.settings"), t("care.peopleYouHelp")) + `<div class="stack">${viewSwitch()}${legacyBanner()}<section class="sheet stack">${languageCard()}${settingsExtras()}${remindersCard()}${accountCard()}</section></div>`;
+  if (S.view === "link") return header(t("nav.connect"), t("join.sub")) + `<div class="stack">${viewSwitch()}${legacyBanner()}${joinBlock()}</div>`;
   if (S.pid && S.snaps[S.pid]) {
-    const p = snap(), tabs = [["today", "Today"], ["calendar", "Calendar"], ["meds", "Medicines"]];
+    const p = snap(), tabs = [["today", t("nav.today")], ["calendar", t("nav.calendar")], ["meds", t("nav.meds")]];
     let body = S.sub === "calendar" ? calendarBlock(S.pid) : S.sub === "meds" ? medsBlock(S.pid) : todayBlock(S.pid);
-    return header(p.name, "Patient", `<button class="btn-sm" data-act="back">All patients</button>`) + `<div class="stack">${alertBanner()}
-      <div class="seg" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${S.sub === k}" data-act="sub" data-sub="${k}">${l}</button>`).join("")}</div>${body}</div>`;
+    return header(p.name, t("care.patient"), `<button class="btn-sm" data-act="back">${esc(t("care.allPatients"))}</button>`) + `<div class="stack">${alertBanner()}
+      <div class="seg" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${S.sub === k}" data-act="sub" data-sub="${k}">${esc(l)}</button>`).join("")}</div>${body}</div>`;
   }
   // Own medicines stay in My medicines. This list is only people connected, or records imported onto this phone.
   const people = S.patients.filter(pt => pt.id !== "me");
   const cards = people.map(pt => {
-    const p = S.snaps[pt.id]; if (!p) return `<div class="pcard"><strong>${esc(pt.name)}</strong><div class="muted">Loading…</div></div>`;
+    const p = S.snaps[pt.id]; if (!p) return `<div class="pcard"><strong>${esc(pt.name)}</strong><div class="muted">${esc(t("common.loading"))}</div></div>`;
     const st = M.patientStatus(p.meds, p.doses, Date.now()), ad = M.adherence(p.meds, p.doses, 7), ne = M.eventsOn(new Date(), p.events).length;
-    const msg = st.missed.length ? st.missed.map(d => d.med.name + " " + fmtTime(d.time)).join(", ") + " not taken" : st.due.length ? st.due.map(d => d.med.name).join(", ") + " due now" : st.total ? "On track today" : "Nothing scheduled today";
-    const local = S.store.mode !== "cloud" || pt.localOnly ? `<div class="muted small">On this phone only. Not a synced link.</div>` : "";
+    const msg = st.missed.length ? t("care.notTaken", { list: st.missed.map(d => d.med.name + " " + fmtTime(d.time)).join(", ") }) : st.due.length ? t("care.dueNow", { list: st.due.map(d => d.med.name).join(", ") }) : t(st.total ? "care.onTrack" : "care.nothingToday");
+    const local = S.store.mode !== "cloud" || pt.localOnly ? `<div class="muted small">${esc(t("care.localOnly"))}</div>` : "";
     return `<button class="pcard ${st.level}" data-act="open" data-pid="${pt.id}">
-      <div class="row spread" style="flex-wrap:nowrap"><strong class="pname">${esc(p.name)}</strong><span class="chip ${st.level === "ok" ? "taken" : st.level}">${st.level === "ok" ? "OK" : st.level}</span></div>
+      <div class="row spread" style="flex-wrap:nowrap"><strong class="pname">${esc(p.name)}</strong><span class="chip ${st.level === "ok" ? "taken" : st.level}">${esc(st.level === "ok" ? t("btn.ok") : statusLabel(st.level))}</span></div>
       <div>${esc(msg)}</div>${local}
-      <div class="row muted small"><span>Today ${st.taken}/${st.total}</span><span>7-day ${ad.pct ?? "–"}${ad.pct != null ? "%" : ""}</span>${ne ? `<span>${ne} ${ne === 1 ? "event" : "events"} today</span>` : ""}${st.low.length ? `<span class="stock-low">Refill: ${st.low.map(m => esc(m.name)).join(", ")}</span>` : ""}</div></button>`;
+      <div class="row muted small"><span>${esc(t("care.todayCount", { taken: st.taken, total: st.total }))}</span><span>${esc(t("care.sevenDay", { pct: ad.pct != null ? ad.pct + "%" : "–" }))}</span>${ne ? `<span>${esc(tn("care.eventsToday", ne))}</span>` : ""}${st.low.length ? `<span class="stock-low">${esc(t("care.refill"))} ${st.low.map(m => esc(m.name)).join(", ")}</span>` : ""}</div></button>`;
   }).join("");
   const cardsForPeople = cards;
-  return header("People", new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })) + `<div class="stack">${viewSwitch()}${legacyBanner()}${alertBanner()}${exampleBanner()}
-    ${people.length ? `<div class="stack">${cardsForPeople}</div>` : `<div class="sheet"><h2>No one connected</h2><p class="muted">${S.store.mode === "cloud" ? "When someone creates a code, you can enter it here. You'll see their name before it connects." : "People you help show up here only after a real link. Sync isn't set up, so this phone can't connect to another phone."}</p></div>`}
-    <div class="row"><button class="btn-primary" data-act="go-link">Enter a code</button></div></div>`;
+  return header(t("nav.people"), longDate(new Date())) + `<div class="stack">${viewSwitch()}${legacyBanner()}${alertBanner()}${exampleBanner()}
+    ${people.length ? `<div class="stack">${cardsForPeople}</div>` : `<div class="sheet"><h2>${esc(t("care.noOne"))}</h2><p class="muted">${esc(t(S.store.mode === "cloud" ? "care.noOneCloud" : "care.noOneLocal"))}</p></div>`}
+    <div class="row"><button class="btn-primary" data-act="go-link">${esc(t("care.enterCode"))}</button></div></div>`;
 }
 function joinBlock() {
-  const status = syncStatus(S.store);
+  const status = syncText(syncStatus(S.store));
   if (S.store.mode !== "cloud") {
     return `<section class="sheet stack"><div class="banner info"><div><strong>${esc(status.title)}</strong> ${esc(status.detail)}</div></div>
-      <p>Ask them to open PillAlly, go to <strong>More › Care team</strong>, and create a code after sync is set up. Typing a code here would not connect you, so there is no box for one.</p></section>`;
+      <p>${t("join.localHelp", { path: `<strong>${esc(t("nav.more"))} › ${esc(t("care.title"))}</strong>` })}</p></section>`;
   }
   const preview = S.invitePreview;
   return `<form class="sheet stack" id="joinform"><div class="banner info"><div><strong>${esc(status.title)}</strong> ${esc(status.detail)}</div></div>
-    <p>Enter their code, or the text from the QR. You'll see who it is before anything connects.</p>
-    <div class="field"><label for="j-code">Code</label><input id="j-code" name="code" autocomplete="off" required placeholder="ABCD-EFGH-JKLM-NPQR" value="${esc(preview?.codeText || "")}"></div>
-    ${preview ? `<div class="banner info"><div>This code connects you to <strong>${esc(preview.patientName)}</strong> as <strong>${esc(preview.permissionLabel || PERMISSIONS[preview.permission] || "")}</strong>. It does not include their medicines.</div></div>
-      <button class="btn-primary" type="button" data-act="invite-accept">Connect</button>` : `<button class="btn-primary" type="submit">Show who this is</button>`}
+    <p>${esc(t("join.help"))}</p>
+    <div class="field"><label for="j-code">${esc(t("join.code"))}</label><input id="j-code" name="code" autocomplete="off" required placeholder="ABCD-EFGH-JKLM-NPQR" value="${esc(preview?.codeText || "")}"></div>
+    ${preview ? `<div class="banner info"><div>${t("join.preview", { name: `<strong>${esc(preview.patientName)}</strong>`, perm: `<strong>${esc(permLabel(preview.permission) || preview.permissionLabel || "")}</strong>` })}</div></div>
+      <button class="btn-primary" type="button" data-act="invite-accept">${esc(t("btn.connect"))}</button>` : `<button class="btn-primary" type="submit">${esc(t("join.show"))}</button>`}
     ${S.joinError ? `<div class="banner dup">${esc(S.joinError)}</div>` : ""}</form>`;
 }
 
 // ---------------- auth screen ----------------
 function authView() {
   const a = S.auth, signup = a.mode === "signup";
-  return `<div class="stack auth">${header(productName(), isCare() ? "Signed-in account" : "Your medicines")}
-    <form class="sheet stack" id="authform"><h2>${signup ? "Create account" : "Sign in"}</h2>
-      ${signup ? `<div class="field"><label for="a-name">Your name</label><input id="a-name" name="name" required autocomplete="name"></div>` : ""}
-      <div class="field"><label for="a-email">Email</label><input id="a-email" name="email" type="email" required autocomplete="email"></div>
-      <div class="field"><label for="a-pw">Password</label><input id="a-pw" name="password" type="password" minlength="6" required autocomplete="${signup ? "new-password" : "current-password"}"></div>
+  return `<div class="stack auth">${header(productName(), t(isCare() ? "auth.subCare" : "auth.sub"))}
+    <form class="sheet stack" id="authform"><h2>${esc(t(signup ? "auth.create" : "auth.signIn"))}</h2>
+      ${signup ? `<div class="field"><label for="a-name">${esc(t("auth.name"))}</label><input id="a-name" name="name" required autocomplete="name"></div>` : ""}
+      <div class="field"><label for="a-email">${esc(t("auth.email"))}</label><input id="a-email" name="email" type="email" required autocomplete="email"></div>
+      <div class="field"><label for="a-pw">${esc(t("auth.password"))}</label><input id="a-pw" name="password" type="password" minlength="6" required autocomplete="${signup ? "new-password" : "current-password"}"></div>
       ${a.error ? `<div class="banner dup">${esc(a.error)}</div>` : ""}
-      <button class="btn-primary" type="submit">${signup ? "Create account" : "Sign in"}</button>
-      <button type="button" class="btn-quiet" data-act="auth-toggle">${signup ? "I already have an account" : "Create an account"}</button>
-      ${signup ? "" : `<button type="button" class="btn-quiet" data-act="auth-reset">Forgot password</button>`}
+      <button class="btn-primary" type="submit">${esc(t(signup ? "auth.create" : "auth.signIn"))}</button>
+      <button type="button" class="btn-quiet" data-act="auth-toggle">${esc(t(signup ? "auth.haveAccount" : "auth.createOne"))}</button>
+      ${signup ? "" : `<button type="button" class="btn-quiet" data-act="auth-reset">${esc(t("auth.forgot"))}</button>`}
     </form></div>`;
 }
 
 // ---------------- render ----------------
+// Tab ids and their t() keys.
 const NAV = {
-  patient: [["today", "Today"], ["calendar", "Calendar"], ["meds", "Medicines"], ["more", "More"]],
-  caregiver: [["patients", "People"], ["link", "Connect"], ["settings", "Settings"]],
+  patient: [["today", "nav.today"], ["calendar", "nav.calendar"], ["meds", "nav.meds"], ["more", "nav.more"]],
+  caregiver: [["patients", "nav.people"], ["link", "nav.connect"], ["settings", "nav.settings"]],
 };
 function onboardView() {
   const suggested = S.store.suggested || S.profile || { usePatient: !S.legacyCare, useCaregiver: !!S.legacyCare };
   const step = S.onboardStep || "role";
   const kept = S.store.mode === "local" && S.store.data && !S.store.data.fresh;
-  const keptLine = kept ? `<div class="banner info"><div><strong>Medicines already on this phone stay here.</strong> Choosing a view does not delete them or grant access to anyone.</div></div>` : "";
+  const keptLine = kept ? `<div class="banner info"><div><strong>${esc(t("onb.keptTitle"))}</strong> ${esc(t("onb.keptBody"))}</div></div>` : "";
   if (step === "recommend") {
-    return `<div class="stack auth">${header(productName(), "One optional question")}${legacyBanner()}
-      <section class="sheet stack"><h2>Did a healthcare professional recommend this app?</h2>
-      <p class="muted">You can skip this. The answer does not change what you can open, and ${esc(productName())} does not treat it as a medical recommendation.</p>
-      <div class="row"><button class="btn-primary" data-act="recommend" data-v="yes">Yes</button><button data-act="recommend" data-v="no">No</button><button data-act="recommend" data-v="skip">Skip</button></div></section></div>`;
+    return `<div class="stack auth">${header(productName(), t("onb.optional"))}${legacyBanner()}
+      <section class="sheet stack"><h2>${esc(t("onb.recQ"))}</h2>
+      <p class="muted">${esc(t("onb.recHelp", { app: productName() }))}</p>
+      <div class="row"><button class="btn-primary" data-act="recommend" data-v="yes">${esc(t("rec.yes"))}</button><button data-act="recommend" data-v="no">${esc(t("rec.no"))}</button><button data-act="recommend" data-v="skip">${esc(t("rec.skip"))}</button></div></section></div>`;
   }
-  const choices = [["patient", "I take medicines"], ["caregiver", "I help someone else"], ["both", "Both"]];
-  return `<div class="stack auth">${header(productName(), "How will you use it?")}${legacyBanner()}${keptLine}
-    <section class="sheet stack"><h2>Choose what you see</h2>
-    <p class="muted">This is only the screens on this phone. It does not connect you to another person and does not let a view open someone else's medicines.</p>
-    <div class="stack">${choices.map(([k, label]) => `<button class="role-choice" data-act="role-pick" data-mode="${k}">${label}</button>`).join("")}</div>
-    <p class="muted small">Suggested from this install: ${suggested.usePatient && suggested.useCaregiver ? "both" : suggested.useCaregiver ? "helping someone" : "taking medicines"}.</p>
+  const choices = [["patient", "role.patient"], ["caregiver", "role.helpOther"], ["both", "role.both"]];
+  return `<div class="stack auth">${header(productName(), t("onb.howUse"))}${legacyBanner()}${keptLine}
+    <section class="sheet stack"><h2>${esc(t("onb.choose"))}</h2>
+    <p class="muted">${esc(t("onb.chooseHelp"))}</p>
+    <div class="stack">${choices.map(([k, label]) => `<button class="role-choice" data-act="role-pick" data-mode="${k}">${esc(t(label))}</button>`).join("")}</div>
+    <p class="muted small">${esc(t("onb.suggested", { what: t(suggested.usePatient && suggested.useCaregiver ? "onb.sugBoth" : suggested.useCaregiver ? "onb.sugHelp" : "onb.sugTake") }))}</p>
+    ${languageCard()}
     </section></div>`;
 }
 function render() {
@@ -669,8 +684,9 @@ function render() {
   if (S.store.mode === "cloud" && !S.user) { $app.innerHTML = authView(); $nav.hidden = true; return; }
   if (!S.user) { $app.innerHTML = authView(); $nav.hidden = true; return; }
   $nav.hidden = false;
+  $nav.setAttribute("aria-label", t("nav.aria"));
   const items = NAV[S.role];
-  $nav.innerHTML = `<div class="in" style="grid-template-columns:repeat(${items.length},1fr)">` + items.map(([k, l]) => `<a href="#${k}" ${S.view === k || (k === "patients" && S.view === "today") ? 'aria-current="page"' : ""}>${l}</a>`).join("") + `</div>`;
+  $nav.innerHTML = `<div class="in" style="grid-template-columns:repeat(${items.length},1fr)">` + items.map(([k, l]) => `<a href="#${k}" ${S.view === k || (k === "patients" && S.view === "today") ? 'aria-current="page"' : ""}>${esc(t(l))}</a>`).join("") + `</div>`;
   const scroll = document.querySelector(".overlay .panel")?.scrollTop;
   $app.innerHTML = (isCare() ? caregiverView() : patientView()) + sheetView();
   const panel = scroll && document.querySelector(".overlay .panel"); if (panel) panel.scrollTop = scroll;
@@ -681,7 +697,7 @@ function timeForm(day, scheduled, value, label) {
   return `<form class="stack" id="timeform"><div class="field"><label for="t-at">${label}</label>
     <input id="t-at" name="at" type="time" required value="${esc(S.sheet.value || value || M.defaultLogTime(day, scheduled))}"></div>
     ${S.sheet.error ? `<div class="banner dup">${esc(S.sheet.error)}</div>` : ""}
-    <div class="row"><button class="btn-primary" type="submit">Save</button><button type="button" data-act="edit-cancel">Cancel</button></div></form>`;
+    <div class="row"><button class="btn-primary" type="submit">${esc(t("btn.save"))}</button><button type="button" data-act="edit-cancel">${esc(t("btn.cancel"))}</button></div></form>`;
 }
 function editLogForm(d) {
   const nm = M.normalizeMed(d.med);
@@ -689,13 +705,13 @@ function editLogForm(d) {
   const amount = S.sheet.amount ?? (d.log?.amount ?? nm.doseAmount);
   const unit = S.sheet.unit || d.log?.unit || nm.doseUnit;
   const timeVal = S.sheet.value || M.hm(new Date(d.log.at));
-  return `<form class="stack" id="editform"><div class="field"><label for="e-amt">Amount logged</label>
+  return `<form class="stack" id="editform"><div class="field"><label for="e-amt">${esc(t("sheet.amountLogged"))}</label>
     <div class="amount"><input id="e-amt" name="amount" type="number" min="0" step="any" required value="${esc(M.fmtNum(amount))}">
-    <select name="unit" aria-label="Unit">${units.map(u => `<option value="${esc(u)}" ${u === unit ? "selected" : ""}>${esc(u === "units" ? "units (IU)" : u)}</option>`).join("")}</select></div>
-    <div class="muted small">This is the amount that was logged. It does not change the dose saved on the medicine.</div></div>
-    <div class="field"><label for="e-at">Time</label><input id="e-at" name="at" type="time" required value="${esc(timeVal)}"></div>
+    <select name="unit" aria-label="${esc(t("sheet.unit"))}">${units.map(u => `<option value="${esc(u)}" ${u === unit ? "selected" : ""}>${esc(unitOption(u))}</option>`).join("")}</select></div>
+    <div class="muted small">${esc(t("sheet.amountHelp"))}</div></div>
+    <div class="field"><label for="e-at">${esc(t("sheet.time"))}</label><input id="e-at" name="at" type="time" required value="${esc(timeVal)}"></div>
     ${S.sheet.error ? `<div class="banner dup">${esc(S.sheet.error)}</div>` : ""}
-    <div class="row"><button class="btn-primary" type="submit">Save log</button><button type="button" data-act="edit-cancel">Cancel</button></div></form>`;
+    <div class="row"><button class="btn-primary" type="submit">${esc(t("btn.saveLog"))}</button><button type="button" data-act="edit-cancel">${esc(t("btn.cancel"))}</button></div></form>`;
 }
 function additionalForm() {
   const med = snap(S.sheet.pid).meds.find(m => m.id === S.sheet.medId);
@@ -705,39 +721,39 @@ function additionalForm() {
   const amount = S.sheet.amount ?? nm.doseAmount;
   const unit = S.sheet.unit || nm.doseUnit;
   const atLocal = S.sheet.atLocal || (dayKey(new Date()) + "T" + M.hm(new Date()));
-  return `<form class="stack" id="addform"><div class="eyebrow">Log actual treatment</div><h2>${esc(med.name)}</h2>
-    <p class="muted">This adds a record of what was given. It does not change the prescription, and it does not move reminders.</p>
-    <div class="field"><label for="a-amt">Amount</label><div class="amount"><input id="a-amt" name="amount" type="number" min="0" step="any" required value="${esc(M.fmtNum(amount))}">
-    <select name="unit" aria-label="Unit">${units.map(u => `<option value="${esc(u)}" ${u === unit ? "selected" : ""}>${esc(u === "units" ? "units (IU)" : u)}</option>`).join("")}</select></div></div>
-    <div class="field"><label for="a-at">When</label><input id="a-at" name="at" type="datetime-local" required max="${dayKey(new Date()) + "T" + M.hm(new Date())}" value="${esc(atLocal)}"></div>
+  return `<form class="stack" id="addform"><div class="eyebrow">${esc(t("add.title"))}</div><h2>${esc(med.name)}</h2>
+    <p class="muted">${esc(t("add.help"))}</p>
+    <div class="field"><label for="a-amt">${esc(t("add.amount"))}</label><div class="amount"><input id="a-amt" name="amount" type="number" min="0" step="any" required value="${esc(M.fmtNum(amount))}">
+    <select name="unit" aria-label="${esc(t("sheet.unit"))}">${units.map(u => `<option value="${esc(u)}" ${u === unit ? "selected" : ""}>${esc(unitOption(u))}</option>`).join("")}</select></div></div>
+    <div class="field"><label for="a-at">${esc(t("ev.when"))}</label><input id="a-at" name="at" type="datetime-local" required max="${dayKey(new Date()) + "T" + M.hm(new Date())}" value="${esc(atLocal)}"></div>
     ${S.sheet.error ? `<div class="banner dup">${esc(S.sheet.error)}</div>` : ""}
-    <div class="row"><button class="btn-primary" type="submit">Save log</button><button type="button" data-act="close-sheet">Cancel</button></div></form>`;
+    <div class="row"><button class="btn-primary" type="submit">${esc(t("btn.saveLog"))}</button><button type="button" data-act="close-sheet">${esc(t("btn.cancel"))}</button></div></form>`;
 }
 function sheetView() {
   if (!S.sheet) return "";
   const { pid, key } = S.sheet, p = snap(pid);
-  const wrap = body => `<div class="overlay" data-act="close-sheet"><div class="panel" role="dialog" aria-label="Dose details">${body}<button class="btn-quiet" data-act="close-sheet">Close</button></div></div>`;
-  if (S.sheet.ev) return `<div class="overlay" data-act="close-sheet"><div class="panel" role="dialog" aria-label="${S.sheet.evId ? "Edit event" : "Log event"}">${eventSheet()}</div></div>`;
+  const wrap = body => `<div class="overlay" data-act="close-sheet"><div class="panel" role="dialog" aria-label="${esc(t("sheet.aria"))}">${body}<button class="btn-quiet" data-act="close-sheet">${esc(t("btn.close"))}</button></div></div>`;
+  if (S.sheet.ev) return `<div class="overlay" data-act="close-sheet"><div class="panel" role="dialog" aria-label="${esc(t(S.sheet.evId ? "ev.edit" : "ev.log"))}">${eventSheet()}</div></div>`;
   if (S.sheet.additional) return wrap(additionalForm());
   if (S.sheet.group) {
     const list = M.dosesOn(new Date(), p.meds, p.doses, opts()).filter(d => d.time === S.sheet.time && !d.log);
     if (!list.length) { S.sheet = null; return ""; }
-    return wrap(`<div class="eyebrow">Scheduled ${fmtTime(S.sheet.time)}</div><h2>When did you take ${list.length === 1 ? "it" : "them"}?</h2>
-      <div class="muted">${list.map(d => esc(d.med.name)).join(" · ")}</div>${timeForm(list[0].day, S.sheet.time, "", "Taken at")}`);
+    return wrap(`<div class="eyebrow">${esc(t("dose.scheduledAt", { time: fmtTime(S.sheet.time) }))}</div><h2>${esc(t(list.length === 1 ? "sheet.whenIt" : "sheet.whenThem"))}</h2>
+      <div class="muted">${list.map(d => esc(d.med.name)).join(" · ")}</div>${timeForm(list[0].day, S.sheet.time, "", t("sheet.takenAt"))}`);
   }
   const d = findDose(pid, key);
   if (!d) { S.sheet = null; return ""; }
-  const who = d.log ? (d.log.byName && d.log.by === "caregiver" ? " by " + esc(d.log.byName) : "") + (d.log.source === "pillbox" ? " (pillbox)" : "") : "";
+  const who = d.log ? (d.log.byName && d.log.by === "caregiver" ? " " + esc(t("dose.by", { name: d.log.byName })) : "") + (d.log.source === "pillbox" ? " " + esc(t("dose.pillboxParen")) : "") : "";
   let actions;
   if (S.sheet.edit && d.log) actions = editLogForm(d);
-  else if (S.sheet.edit) actions = timeForm(d.day, d.time, "", "When was it logged?");
-  else if (d.log && d.log.status === "taken") actions = `<div class="row"><button data-act="edit-time" data-pid="${pid}" data-key="${d.key}">Correct this log</button><button data-act="undo" data-pid="${pid}" data-key="${d.key}">Undo</button><button class="btn-danger" data-act="remove-log" data-pid="${pid}" data-key="${d.key}">${S.sheet.confirmRemove ? "Remove log" : "Remove this log"}</button></div>
-    <p class="muted small">Removing a log takes it out of history and puts the supply back. It does not change the schedule. Skip is different: that marks a scheduled dose which isn't logged as not taken, and leaves it on the schedule.</p>`;
-  else if (d.log) actions = `<div class="row"><button data-act="undo" data-pid="${pid}" data-key="${d.key}">Undo skip</button></div><p class="muted small">This scheduled dose stays on the schedule as not taken.</p>`;
-  else actions = `<button class="btn-primary" data-act="take-key" data-pid="${pid}" data-key="${d.key}">Log ${esc(M.doseLabel(d.med))} now</button>
-      <button data-act="edit-time" data-pid="${pid}" data-key="${d.key}">Log at another time</button>
-      <button class="btn-quiet" data-act="skip" data-pid="${pid}" data-key="${d.key}">Skip this scheduled dose</button>
-      <p class="muted small">Skip marks this scheduled dose as not taken. The schedule stays. This does not delete later doses.</p>`;
+  else if (S.sheet.edit) actions = timeForm(d.day, d.time, "", t("sheet.whenLogged"));
+  else if (d.log && d.log.status === "taken") actions = `<div class="row"><button data-act="edit-time" data-pid="${pid}" data-key="${d.key}">${esc(t("sheet.correct"))}</button><button data-act="undo" data-pid="${pid}" data-key="${d.key}">${esc(t("btn.undo"))}</button><button class="btn-danger" data-act="remove-log" data-pid="${pid}" data-key="${d.key}">${esc(t(S.sheet.confirmRemove ? "sheet.removeConfirm" : "sheet.remove"))}</button></div>
+    <p class="muted small">${esc(t("sheet.removeHelp"))}</p>`;
+  else if (d.log) actions = `<div class="row"><button data-act="undo" data-pid="${pid}" data-key="${d.key}">${esc(t("sheet.undoSkip"))}</button></div><p class="muted small">${esc(t("sheet.skipStays"))}</p>`;
+  else actions = `<button class="btn-primary" data-act="take-key" data-pid="${pid}" data-key="${d.key}">${esc(t("today.logDoseNow", { dose: M.doseLabel(d.med) }))}</button>
+      <button data-act="edit-time" data-pid="${pid}" data-key="${d.key}">${esc(t("sheet.another"))}</button>
+      <button class="btn-quiet" data-act="skip" data-pid="${pid}" data-key="${d.key}">${esc(t("sheet.skip"))}</button>
+      <p class="muted small">${esc(t("sheet.skipHelp"))}</p>`;
   return wrap(`<div class="eyebrow">${esc(M.medSummary(d.med))}</div><h2>${esc(d.med.name)} ${esc(d.med.strength)}</h2>${d.med.notes ? `<div class="muted">${esc(d.med.notes)}</div>` : ""}
     <p class="dose-times"><strong>${esc(M.fmtDoseTimes(d))}</strong>${who}</p>${actions}`);
 }
@@ -838,14 +854,14 @@ document.addEventListener("click", async e => {
         break;
       }
       case "take-key": { const d = findDose(pid, el.dataset.key); if (d) { const res = await takeDose(pid, d); if (res && res.code === "applied") toast(doseResultMessage(res, d.med), res.key); } S.sheet = null; break; }
-      case "skip": { const d = findDose(pid, el.dataset.key); if (d) await skipDose(pid, d); S.sheet = null; toast("Dose skipped"); break; }
-      case "undo": await undoDose(pid, el.dataset.key); S.sheet = null; document.getElementById("toast").hidden = true; toast("Undone"); break;
+      case "skip": { const d = findDose(pid, el.dataset.key); if (d) await skipDose(pid, d); S.sheet = null; toast(t("toast.skipped")); break; }
+      case "undo": await undoDose(pid, el.dataset.key); S.sheet = null; document.getElementById("toast").hidden = true; toast(t("toast.undone")); break;
       case "take-prn": await logAdditional(pid, snap(pid).meds.find(m => m.id === el.dataset.med)); break;
       case "log-additional": S.sheet = { pid, additional: true, medId: el.dataset.med }; break;
       case "force": await logAdditional(S.pid, snap().meds.find(m => m.id === el.dataset.med), new Date(), null, null, true); S.alert = null; break;
       case "remove-log":
         if (!S.sheet?.confirmRemove) { S.sheet = { ...(S.sheet || { pid, key: el.dataset.key }), pid, key: el.dataset.key || S.sheet?.key, confirmRemove: true }; break; }
-        await undoDose(pid, el.dataset.key || S.sheet.key); S.sheet = null; toast("Log removed"); break;
+        await undoDose(pid, el.dataset.key || S.sheet.key); S.sheet = null; toast(t("toast.logRemoved")); break;
       case "dismiss": S.alert = null; break;
       case "close-sheet": S.sheet = null; break;
       case "open-sheet": S.sheet = { pid, key: el.dataset.key }; break;
@@ -857,6 +873,8 @@ document.addEventListener("click", async e => {
       case "ev-sev": readEventForm(); S.sheet.ev.severity = S.sheet.ev.severity === Number(el.dataset.v) ? null : Number(el.dataset.v); break;
       case "ev-cause": readEventForm(); S.sheet.ev.cause = S.sheet.ev.cause === el.dataset.v ? null : el.dataset.v; break;
       case "body-figure": S.settings.bodyFigure = el.dataset.v === "female" ? "female" : "male"; saveSettings(); break;
+      // Saved on this phone only; redraw everything (tabs, title, alarms) in the new language.
+      case "lang": saveLangPref(el.dataset.v); initLang(); document.title = productName(); if (!isCare()) N.scheduleReminders(snap().meds, snap().doses).catch(() => {}); break;
       case "ev-area": {
         if (!S.sheet?.ev) break;
         readEventForm();
@@ -867,7 +885,7 @@ document.addEventListener("click", async e => {
       }
       case "ev-delete":
         readEventForm(); if (!S.sheet.confirmDelete) { S.sheet.confirmDelete = true; break; }
-        await S.store.deleteEvent(S.sheet.pid, S.sheet.evId); S.sheet = null; toast("Event deleted"); break;
+        await S.store.deleteEvent(S.sheet.pid, S.sheet.evId); S.sheet = null; toast(t("toast.eventDeleted")); break;
       case "earlier-group": S.sheet = { pid, time: el.dataset.time, group: true }; break;
       case "clear-examples": S.store.clearExamples(); S.snaps = {}; if (!isCare()) S.pid = "me"; break;
       case "cal-prev": S.cal.m--; if (S.cal.m < 0) { S.cal.m = 11; S.cal.y--; } break;
@@ -894,12 +912,12 @@ document.addEventListener("click", async e => {
       case "drug-search": {
         readForm();
         const query = document.getElementById("drug-q")?.value ?? S.drug?.query ?? "";
-        S.drug = { step: "search", query, message: "Searching…", choices: [] };
+        S.drug = { step: "search", query, message: t("drug.searching"), choices: [] };
         render();
         const res = await searchDrugNames(query);
         if (!S.drug) break;
         S.drug.choices = (res.choices || []).slice(0, 20);
-        S.drug.message = res.choices?.length > 20 ? "Showing the first 20. Type more of the name if yours isn't here." : drugMessage(res.code);
+        S.drug.message = res.choices?.length > 20 ? t("drug.first20") : drugMessage(res.code);
         break;
       }
       case "drug-code-go": {
@@ -924,16 +942,16 @@ document.addEventListener("click", async e => {
         const next = { ...was, addToCalendar: !was.addToCalendar };
         const msg = await syncCalendar(was, next); await S.store.saveMed(S.pid, next); if (msg) toast(msg); break;
       }
-      case "delete": readForm(); if (!S.editing.confirmDelete) { S.editing.confirmDelete = true; break; } if (!isCare()) await N.removeMedFromCalendar(S.editing.calendarEventIds || []); await S.store.deleteMed(S.pid, S.editing.id); S.editing = null; S.medDetail = null; S.medHistory = null; toast("Medicine deleted"); break;
+      case "delete": readForm(); if (!S.editing.confirmDelete) { S.editing.confirmDelete = true; break; } if (!isCare()) await N.removeMedFromCalendar(S.editing.calendarEventIds || []); await S.store.deleteMed(S.pid, S.editing.id); S.editing = null; S.medDetail = null; S.medHistory = null; toast(t("toast.medDeleted")); break;
       case "perm": S.perm = await N.askReminderPermission(); if (!isCare()) await N.scheduleReminders(snap().meds, snap().doses); break;
       case "invite-perm": S.invite = await S.store.createInvite(S.pid, el.dataset.perm); break;
       case "invite-clear": S.invite = null; break;
       case "invite-accept": {
         const res = await S.store.acceptInvite(S.invitePreview?.codeText || "");
-        if (!res?.ok) { S.joinError = res?.message || "That code didn't connect."; break; }
+        if (!res?.ok) { S.joinError = res?.message || t("join.didntConnect"); break; }
         S.invitePreview = null; S.joinError = "";
         if (res.patientId) S.pid = res.patientId;
-        toast("Connected to " + (res.patientName || "them"));
+        toast(t("toast.connected", { name: res.patientName || t("toast.them") }));
         location.hash = "patients";
         return;
       }
@@ -947,7 +965,7 @@ document.addEventListener("click", async e => {
       case "role-toggle": {
         const nextPatient = el.dataset.mode === "patient" ? !S.profile?.usePatient : !!S.profile?.usePatient;
         const nextCare = el.dataset.mode === "caregiver" ? !S.profile?.useCaregiver : !!S.profile?.useCaregiver;
-        if (!nextPatient && !nextCare) { toast("Keep at least one."); break; }
+        if (!nextPatient && !nextCare) { toast(t("toast.keepOne")); break; }
         const view = !nextCare && isCare() ? "patient" : !nextPatient && !isCare() ? "caregiver" : S.activeView;
         applyUse(nextPatient, nextCare, S.profile?.recommended || "skip", view);
         const hash = view === "caregiver" ? "#patients" : "#today";
@@ -966,13 +984,13 @@ document.addEventListener("click", async e => {
       }
       case "export-backup": {
         const data = S.store.exportBackup?.();
-        if (!data) { toast("There's nothing to export from a signed-in account on this screen."); break; }
+        if (!data) { toast(t("toast.nothingExport")); break; }
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob); a.download = "pillbox-backup.json";
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(a.href), 8000);
-        toast("Backup downloaded. Moving the file does not link another phone.");
+        toast(t("toast.backupDone"));
         break;
       }
       case "import-backup": {
@@ -981,14 +999,14 @@ document.addEventListener("click", async e => {
         input.onchange = async () => {
           try {
             const plan = S.store.importBackup(JSON.parse(await input.files[0].text()));
-            toast(plan.message || "Couldn't import that file.");
-          } catch (err) { toast("Couldn't read that file."); }
+            toast(plan.message || t("toast.importFail"));
+          } catch (err) { toast(t("toast.readFail")); }
           render();
         };
         input.click();
         return;
       }
-      case "unlink": await S.store.removeCaregiver(S.pid, el.dataset.uid); toast("Removed"); break;
+      case "unlink": await S.store.removeCaregiver(S.pid, el.dataset.uid); toast(t("toast.removed")); break;
       case "ble": N.connectPillbox(slot => lidOpened(slot, "pillbox").catch(err => toast(err.message || String(err))), s => { S.ble = s; render(); }); return;
       case "sim": await lidOpened(Number(el.dataset.slot), "simulated"); break;
       case "open": S.pid = el.dataset.pid; S.sub = "today"; window.scrollTo(0, 0); break;
@@ -997,7 +1015,7 @@ document.addEventListener("click", async e => {
       case "go-link": location.hash = "link"; return;
       case "signout": await S.store.signOut(); S.user = null; S.snaps = {}; S.patients = []; break;
       case "auth-toggle": S.auth = { mode: S.auth.mode === "signup" ? "signin" : "signup", error: "" }; break;
-      case "auth-reset": { const email = document.getElementById("a-email").value; if (!email) { S.auth.error = "Type your email first, then tap Forgot password."; break; } await S.store.resetPassword(email); S.auth.error = "Check your email for a reset link."; break; }
+      case "auth-reset": { const email = document.getElementById("a-email").value; if (!email) { S.auth.error = t("auth.emailFirst"); break; } await S.store.resetPassword(email); S.auth.error = t("auth.checkEmail"); break; }
     }
   } catch (err) { toast(err.message || String(err)); }
   render();
@@ -1012,9 +1030,9 @@ document.addEventListener("submit", async e => {
       readForm(); const m = S.editing; m.name = m.name.trim(); if (!m.name) return;
       m.schedule = cleanSchedule(m.schedule);
       m.times = m.schedule.kind === "prn" ? [] : [...new Set(m.times)].sort();
-      if (m.schedule.kind !== "prn" && !m.times.length) { toast("Add at least one time of day, or choose As needed."); return; }
-      if (m.schedule.kind === "weekdays" && !m.schedule.days.length) { toast("Pick at least one day of the week."); return; }
-      if (!(m.doseAmount > 0)) { toast("Enter how much each dose is."); return; }
+      if (m.schedule.kind !== "prn" && !m.times.length) { toast(t("form.needTime")); return; }
+      if (m.schedule.kind === "weekdays" && !m.schedule.days.length) { toast(t("form.needDay")); return; }
+      if (!(m.doseAmount > 0)) { toast(t("form.needDose")); return; }
       if (m.type !== "pill" && m.type !== "other") m.slot = null;
       if (!M.CONTAINERS.includes(m.supplyUnit)) m.perContainer = null;
       const isNew = m.isNew; delete m.isNew; delete m.confirmDelete;
@@ -1026,64 +1044,64 @@ document.addEventListener("submit", async e => {
       if (startCount != null) m.stock = 0;
       await S.store.saveMed(S.pid, m);
       if (startCount != null) await adjustStock(S.pid, m.id, startCount, stockEv("start"));
-      S.editing = null; S.medDetail = m.id; toast((isNew ? "Medicine added" : "Saved") + (calMsg ? ". " + calMsg : ""));
+      S.editing = null; S.medDetail = m.id; toast(t(isNew ? "toast.medAdded" : "toast.saved") + (calMsg ? ". " + calMsg : ""));
     } else if (f.id === "timeform") {
       const sh = S.sheet, picked = new FormData(f).get("at"), p = snap(sh.pid);
       const list = sh.group ? M.dosesOn(new Date(), p.meds, p.doses, opts()).filter(d => d.time === sh.time && !d.log) : [findDose(sh.pid, sh.key)].filter(Boolean);
       if (!list.length) { S.sheet = null; render(); return; }
       // changing a logged time keeps the day it was taken (a Monday dose taken Tuesday stays on Tuesday)
       const when = list[0].log ? M.editedLogTime(list[0].log.at, picked) : M.logTimeFor(list[0].day, list[0].time, picked);
-      if (!when) { sh.error = "That time hasn't happened yet."; render(); return; }
+      if (!when) { sh.error = t("err.future"); render(); return; }
       let label = M.fmtLogged({ status: "taken", at: when.toISOString() }, list[0].day); label = label[0].toLowerCase() + label.slice(1);
       if (list[0].log) {
         await commit(sh.pid, { opId: M.uid(), kind: "edit", medId: list[0].med.id, key: list[0].key, amount: list[0].log.amount, unit: list[0].log.unit, at: when.toISOString() });
-        toast("Changed to " + label);
+        toast(t("toast.changedTo", { label }));
       } else {
         const saved = [];
         for (const d of list) { const res = await takeDose(sh.pid, d, "app", when); if (res && res.code === "applied") saved.push(res); }
         if (saved.length === 1) toast(doseResultMessage(saved[0], list[0].med), saved[0].key);
-        else if (saved.length) toast(saved.length + " treatments logged");
+        else if (saved.length) toast(t("toast.nLogged", { n: saved.length }));
       }
       S.sheet = null;
     } else if (f.id === "evform") {
       readEventForm(); const sh = S.sheet, ev = sh.ev, when = new Date(ev.atLocal); // datetime-local: local time
-      if (isNaN(when.getTime())) { sh.error = "Pick when it happened."; render(); return; }
-      if (when.getTime() > Date.now() + 60000) { sh.error = "That time hasn't happened yet."; render(); return; }
+      if (isNaN(when.getTime())) { sh.error = t("err.pickWhen"); render(); return; }
+      if (when.getTime() > Date.now() + 60000) { sh.error = t("err.future"); render(); return; }
       const was = sh.evId ? (snap(sh.pid).events || {})[sh.evId] : null, name = S.user?.name || "";
       // the first person to log it stays its author; later changes say who edited
       const rec = { ...(was || {}), ...ev, id: sh.evId || M.uid(), at: when, updatedAt: Date.now(),
         ...(was ? { editedBy: S.role, editedByName: name } : { by: S.role, byName: name, createdAt: Date.now() }) };
       await S.store.saveEvent(sh.pid, rec);
-      S.sheet = null; toast(was ? "Event saved" : M.EVENT_TYPES[rec.type].label + " logged");
+      S.sheet = null; toast(was ? t("toast.eventSaved") : t("toast.eventLogged", { type: M.eventTypeLabel(rec.type) }));
     } else if (f.id === "editform") {
       const sh = S.sheet, d = findDose(sh.pid, sh.key);
       if (!d?.log) { S.sheet = null; render(); return; }
       const fd = new FormData(f);
       const when = M.editedLogTime(d.log.at, fd.get("at"));
-      if (!when) { sh.error = "That time hasn't happened yet."; render(); return; }
+      if (!when) { sh.error = t("err.future"); render(); return; }
       const amount = Number(fd.get("amount"));
-      if (!(amount > 0)) { sh.error = "Enter the amount that was logged."; render(); return; }
+      if (!(amount > 0)) { sh.error = t("err.amount"); render(); return; }
       await commit(sh.pid, { opId: M.uid(), kind: "edit", medId: d.med.id, key: d.key, amount, unit: fd.get("unit"), at: when.toISOString() });
-      toast("Log updated"); S.sheet = null;
+      toast(t("toast.logUpdated")); S.sheet = null;
     } else if (f.id === "addform") {
       const sh = S.sheet, med = snap(sh.pid).meds.find(m => m.id === sh.medId);
       const fd = new FormData(f), when = new Date(fd.get("at"));
-      if (!med || isNaN(when.getTime())) { sh.error = "Pick when it happened."; render(); return; }
-      if (when.getTime() > Date.now() + 60000) { sh.error = "That time hasn't happened yet."; render(); return; }
+      if (!med || isNaN(when.getTime())) { sh.error = t("err.pickWhen"); render(); return; }
+      if (when.getTime() > Date.now() + 60000) { sh.error = t("err.future"); render(); return; }
       const amount = Number(fd.get("amount"));
-      if (!(amount > 0)) { sh.error = "Enter the amount that was logged."; render(); return; }
+      if (!(amount > 0)) { sh.error = t("err.amount"); render(); return; }
       const res = await logAdditional(sh.pid, med, when, amount, fd.get("unit"), true);
       if (res) S.sheet = null;
     } else if (f.id === "stockform") {
       const fd = new FormData(f), n = Number(fd.get("n")), note = (fd.get("note") || "").trim();
       const m = snap().meds.find(x => x.id === S.medDetail); if (!m || !(n >= 0)) return;
-      if (S.stockForm.mode === "refill") { await adjustStock(S.pid, m.id, n, stockEv("refill", note)); toast(M.qty(n, M.normalizeMed(m).supplyUnit) + " added"); }
-      else { if (typeof m.stock !== "number") await S.store.saveMed(S.pid, { ...m, stock: 0 }); await adjustStock(S.pid, m.id, n - (m.stock || 0), stockEv("adjust", note)); toast("Count saved"); }
+      if (S.stockForm.mode === "refill") { await adjustStock(S.pid, m.id, n, stockEv("refill", note)); toast(t("toast.added", { qty: M.qty(n, M.normalizeMed(m).supplyUnit) })); }
+      else { if (typeof m.stock !== "number") await S.store.saveMed(S.pid, { ...m, stock: 0 }); await adjustStock(S.pid, m.id, n - (m.stock || 0), stockEv("adjust", note)); toast(t("toast.countSaved")); }
       S.stockForm = null;
     } else if (f.id === "joinform") {
       const code = new FormData(f).get("code");
       const preview = await S.store.previewInvite(code);
-      if (!preview?.ok) { S.joinError = preview?.message || "That code didn't work."; S.invitePreview = null; }
+      if (!preview?.ok) { S.joinError = preview?.message || t("join.didntWork"); S.invitePreview = null; }
       else { S.joinError = ""; S.invitePreview = { ...preview, codeText: code }; }
     } else if (f.id === "authform") {
       const fd = Object.fromEntries(new FormData(f));
@@ -1103,11 +1121,11 @@ document.addEventListener("submit", async e => {
 });
 function friendly(err) {
   const c = err && err.code || "";
-  if (c.includes("invalid-credential") || c.includes("wrong-password") || c.includes("user-not-found")) return "That email and password don't match. Try again or reset your password.";
-  if (c.includes("email-already-in-use")) return "There's already an account with that email. Sign in instead.";
-  if (c.includes("weak-password")) return "Use a password with at least 6 characters.";
-  if (c.includes("network")) return "No internet connection. Try again when you're online.";
-  if (c.includes("permission-denied")) return "That code isn't valid or has expired. Ask for a new one.";
+  if (c.includes("invalid-credential") || c.includes("wrong-password") || c.includes("user-not-found")) return t("auth.errMatch");
+  if (c.includes("email-already-in-use")) return t("auth.errInUse");
+  if (c.includes("weak-password")) return t("auth.errWeak");
+  if (c.includes("network")) return t("auth.errNetwork");
+  if (c.includes("permission-denied")) return t("auth.errCode");
   return err.message || String(err);
 }
 
@@ -1130,7 +1148,7 @@ function checkMissed() {
     for (const d of M.patientStatus(p.meds, p.doses, Date.now()).missed) {
       if (alertedMissed.has(d.key) || S.store.example) continue;
       alertedMissed.add(d.key);
-      N.alertNow(p.name + " missed a dose", d.med.name + " at " + fmtTime(d.time) + " isn't marked taken.");
+      N.alertNow(t("notif.missedTitle", { name: p.name }), t("notif.missedBody", { med: d.med.name, time: fmtTime(d.time) }));
     }
   }
   try { localStorage.setItem("pillbox.alerted", JSON.stringify([...alertedMissed].slice(-300))); } catch (e) {}
@@ -1148,7 +1166,7 @@ async function onReminderAction(a) {
   try {
     let logged = 0;
     for (const d of list) { const res = await takeDose(pid, d, "reminder"); if (res && res.code === "applied") logged++; }
-    if (logged) toast(logged === 1 ? "Logged from the reminder" : logged + " treatments logged from the reminder");
+    if (logged) toast(tn("toast.fromReminder", logged));
   } catch (err) { toast(err.message || String(err)); }
   if (!busy()) render();
 }
@@ -1182,8 +1200,8 @@ async function boot() {
   if (S.profile?.onboarded) writeProfile(S.profile);
   setActiveView(chooseView(S.profile || S.store.suggested || { usePatient: !S.legacyCare, useCaregiver: !!S.legacyCare }));
   window.addEventListener("hashchange", route);
-  $app.innerHTML = `<p class="muted" style="padding-top:40px">Loading…</p>`;
-  try { S.user = await S.store.init(); } catch (e) { $app.innerHTML = `<div class="banner dup">Couldn't start: ${esc(e.message)}</div>`; return; }
+  $app.innerHTML = `<p class="muted" style="padding-top:40px">${esc(t("common.loading"))}</p>`;
+  try { S.user = await S.store.init(); } catch (e) { $app.innerHTML = `<div class="banner dup">${esc(t("err.start", { msg: e.message }))}</div>`; return; }
   // Paint the UI before any alarm/permission/native work. A hung Capacitor call must not
   // leave the app stuck on "Loading…".
   if (S.user) wirePatients();

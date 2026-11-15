@@ -1,6 +1,7 @@
 // Android-only features, each with a browser fallback so the app also runs in Chrome for testing.
 import { Capacitor } from "@capacitor/core";
-import { fmtTime, dosesOn, reminderPlan, doseLabel, scheduleLabel, recurrenceOf, calendarStarts, calendarTitle, medToIcs } from "./model.js";
+import { fmtTime, dosesOn, reminderPlan, doseLabel, recurrenceOf, calendarStarts, calendarTitle, calendarDescription, medToIcs } from "./model.js";
+import { t } from "./i18n.js";
 
 export const isNative = Capacitor.isNativePlatform();
 
@@ -78,7 +79,7 @@ async function replaceReminders(meds, doses) {
     if (old.length) await L.cancel({ notifications: old });
     const notifications = reminderPlan(meds, doses).map(r => ({
       id: r.id,
-      title: "Time for your " + fmtTime(r.time) + " medicine",
+      title: t("notif.doseTitle", { time: fmtTime(r.time) }),
       body: r.meds.map(m => m.name + (m.strength ? " " + m.strength : "") + " (" + doseLabel(m) + ")").join(", "),
       schedule: { at: r.at, allowWhileIdle: true },
       actionTypeId: "DOSE",
@@ -104,7 +105,7 @@ export async function scheduleCaregiverChecks(patients, dueWindowMin = 60) {
       for (const d of dosesOn(new Date(), p.meds, p.doses, { now, dueWindowMin })) {
         const fire = d.when + dueWindowMin * 60000;
         if (d.log || fire <= now) continue;
-        notifications.push({ id: id++, title: p.name + " may have missed a dose", body: d.med.name + " at " + fmtTime(d.time) + " isn't marked taken yet.", schedule: { at: new Date(fire), allowWhileIdle: true }, channelId: "care", extra: { pid: p.id, key: d.key } });
+        notifications.push({ id: id++, title: t("notif.mayMissTitle", { name: p.name }), body: t("notif.mayMissBody", { med: d.med.name, time: fmtTime(d.time) }), schedule: { at: new Date(fire), allowWhileIdle: true }, channelId: "care", extra: { pid: p.id, key: d.key } });
       }
     }
     if (notifications.length) await L.schedule({ notifications });
@@ -130,10 +131,10 @@ export async function setupNotifications(onAction) {
     await loadLN();
     const L = ln();
     try {
-      await L.createChannel({ id: "doses", name: "Dose reminders", importance: 5, vibration: true, visibility: 1 });
-      await L.createChannel({ id: "care", name: "Caregiver alerts", importance: 4, vibration: true });
+      await L.createChannel({ id: "doses", name: t("notif.chDoses"), importance: 5, vibration: true, visibility: 1 });
+      await L.createChannel({ id: "care", name: t("notif.chCare"), importance: 4, vibration: true });
     } catch (e) {}
-    await L.registerActionTypes({ types: [{ id: "DOSE", actions: [{ id: "take", title: "Taken" }, { id: "snooze", title: "Snooze 10 min" }] }] });
+    await L.registerActionTypes({ types: [{ id: "DOSE", actions: [{ id: "take", title: t("notif.taken") }, { id: "snooze", title: t("notif.snooze") }] }] });
     L.addListener("localNotificationActionPerformed", ev => {
       try { onAction({ action: ev.actionId, extra: ev.notification.extra || {}, title: ev.notification.title, body: ev.notification.body }); }
       catch (e) {}
@@ -159,7 +160,7 @@ async function loadCal() { if (!CAL) CAL = (await import("@ebarooni/capacitor-ca
 const DAY_TO_PLUGIN = [7, 1, 2, 3, 4, 5, 6]; // JS Sunday=0 → plugin Monday=1 … Sunday=7
 export async function addMedToCalendar(med, doses = {}) {
   const starts = calendarStarts(med, doses), r = recurrenceOf(med, doses);
-  if (!starts.length || !r) return { ok: false, method: "none", ids: [], message: "Nothing to add: this medicine has no upcoming scheduled doses." };
+  if (!starts.length || !r) return { ok: false, method: "none", ids: [], message: t("cal.nothingToAdd") };
   if (isNative) {
     let denied = false;
     try {
@@ -177,17 +178,17 @@ export async function addMedToCalendar(med, doses = {}) {
         for (const { start } of starts) {
           const res = await CAL.createEvent({
             title: calendarTitle(med),
-            description: "Take " + doseLabel(med) + " (" + scheduleLabel(med) + ")." + (med.notes ? " " + med.notes : ""),
+            description: calendarDescription(med),
             startDate: start.getTime(), endDate: start.getTime() + 15 * 60000,
             recurrence, color: med.color || undefined,
           });
           if (res && res.id) ids.push(String(res.id));
         }
-        return { ok: true, method: "device", ids, message: "Added to your calendar" };
+        return { ok: true, method: "device", ids, message: t("cal.added") };
       }
     } catch (e) {}
     const shared = await shareIcs(med, doses);
-    if (denied) return { ...shared, message: shared.ok ? "No calendar permission, so we made a calendar file to share instead." : "Calendar access wasn't allowed. You can turn it on in Android settings." };
+    if (denied) return { ...shared, message: shared.ok ? t("cal.noPermFile") : t("cal.noPerm") };
     return shared;
   }
   return shareIcs(med, doses);
@@ -199,22 +200,22 @@ export async function removeMedFromCalendar(ids = []) {
 /** Share (Android) or download (browser) the medicine's .ics file. */
 export async function shareIcs(med, doses = {}) {
   const ics = medToIcs(med, doses), name = (String(med.name || "medicine").replace(/[^\w-]+/g, "-").replace(/^-+|-+$/g, "") || "medicine") + ".ics";
-  if (!ics) return { ok: false, method: "none", ids: [], message: "Nothing to add: this medicine has no upcoming scheduled doses." };
+  if (!ics) return { ok: false, method: "none", ids: [], message: t("cal.nothingToAdd") };
   try {
     if (isNative) {
       const { Filesystem, Directory, Encoding } = await import("@capacitor/filesystem");
       const { Share } = await import("@capacitor/share");
       const f = await Filesystem.writeFile({ path: name, data: ics, directory: Directory.Cache, encoding: Encoding.UTF8 });
-      await Share.share({ title: med.name + " schedule", files: [f.uri], dialogTitle: "Add to calendar" });
+      await Share.share({ title: t("cal.shareTitle", { name: med.name }), files: [f.uri], dialogTitle: t("cal.shareDialog") });
     } else {
       const url = URL.createObjectURL(new Blob([ics], { type: "text/calendar" }));
       const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 10000);
     }
-    return { ok: true, method: "ics", ids: [], message: isNative ? "Calendar file ready to share" : "Calendar file downloaded. Open it to add the doses." };
+    return { ok: true, method: "ics", ids: [], message: isNative ? t("cal.fileReady") : t("cal.fileDownloaded") };
   } catch (e) {
     const cancelled = /cancel/i.test(String(e && e.message || e));
-    return { ok: false, method: "ics", ids: [], message: cancelled ? "Not added to a calendar." : "Couldn't make the calendar file." };
+    return { ok: false, method: "ics", ids: [], message: cancelled ? t("cal.notAdded") : t("cal.fileFail") };
   }
 }
 
@@ -229,21 +230,21 @@ export async function connectPillbox(onOpen, onStatus) {
       const { BleClient } = await import("@capacitor-community/bluetooth-le");
       await BleClient.initialize({ androidNeverForLocation: true });
       const dev = await BleClient.requestDevice({ services: [BLE_SERVICE] });
-      onStatus("Connecting to " + (dev.name || "pillbox") + "…");
-      await BleClient.connect(dev.deviceId, () => onStatus("Disconnected"));
+      onStatus(t("ble.connecting", { name: dev.name || t("ble.pillbox") }));
+      await BleClient.connect(dev.deviceId, () => onStatus(t("ble.disconnected")));
       await BleClient.startNotifications(dev.deviceId, BLE_SERVICE, BLE_TX, v => parse(new TextDecoder().decode(v)));
-      onStatus("Connected to " + (dev.name || "pillbox"));
+      onStatus(t("ble.connected", { name: dev.name || t("ble.pillbox") }));
     } else if (navigator.bluetooth) {
       const dev = await navigator.bluetooth.requestDevice({ filters: [{ services: [BLE_SERVICE] }] });
-      onStatus("Connecting to " + (dev.name || "pillbox") + "…");
+      onStatus(t("ble.connecting", { name: dev.name || t("ble.pillbox") }));
       const gatt = await dev.gatt.connect();
       const ch = await (await gatt.getPrimaryService(BLE_SERVICE)).getCharacteristic(BLE_TX);
       await ch.startNotifications();
       ch.addEventListener("characteristicvaluechanged", e => parse(new TextDecoder().decode(e.target.value)));
-      dev.addEventListener("gattserverdisconnected", () => onStatus("Disconnected"));
-      onStatus("Connected to " + (dev.name || "pillbox"));
-    } else onStatus("Bluetooth isn't available on this device.");
-  } catch (e) { onStatus("Couldn't connect: " + (e.message || e)); }
+      dev.addEventListener("gattserverdisconnected", () => onStatus(t("ble.disconnected")));
+      onStatus(t("ble.connected", { name: dev.name || t("ble.pillbox") }));
+    } else onStatus(t("ble.unavailable"));
+  } catch (e) { onStatus(t("ble.failed", { msg: e.message || e })); }
   function parse(msg) { const m = /OPEN:(\d+)/i.exec(msg.trim()); if (m) onOpen(Number(m[1])); }
 }
 
