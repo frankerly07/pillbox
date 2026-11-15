@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { commitAdministration, supplyUsed } from "./dose-log.js";
+import { commitAdministration, supplyUsed, doseHistory, historyNoun, historyCount } from "./dose-log.js";
 import { doseAnchors, dosesOn, normalizeMed, scheduledOn, supplyPerDose, doseKey, dayKey } from "./model.js";
 
 const NOW = new Date(2026, 10, 4, 12, 0).getTime(); // Wed 4 Nov 2026 noon
@@ -210,5 +210,63 @@ describe("backdated additional treatment", () => {
     const today = dosesOn(new Date(NOW), res.patient.meds, res.patient.doses, { now: NOW });
     expect(today.map(d => d.time)).toEqual(["08:00", "20:00"]);
     expect(res.patient.meds[0].stock).toBe(8);
+  });
+});
+
+describe("doseHistory counts and groups taken treatments", () => {
+  const shot = () => {
+    const p = {
+      id: "p", ownerUid: "me", name: "Me",
+      meds: [normalizeMed({ id: "s", name: "Shot", type: "injection", doseAmount: 40, doseUnit: "units", supplyUnit: "pens", perContainer: 4, stock: 5, times: ["08:00"], schedule: { kind: "daily" } })],
+      doses: {}, stockLog: [], doseAudit: [], appliedOps: [],
+    };
+    return p;
+  };
+  const sKey = day => doseKey("s", day, "08:00");
+  const take = (p, opId, day, h, m, extra = {}) => {
+    const [y, mo, d] = day.split("-").map(Number);
+    const res = commitAdministration(p, { opId, kind: "log", medId: "s", key: sKey(day), slot: "08:00", day, time: "08:00", at: new Date(y, mo - 1, d, h, m).toISOString(), actor, ...extra }, NOW);
+    expect(res.code).toBe("applied");
+    return res.patient;
+  };
+
+  it("is empty with no logs", () => {
+    const p = shot();
+    expect(doseHistory(p.meds[0], p.doses)).toEqual({ total: 0, days: [] });
+    expect(doseHistory(p.meds[0], undefined)).toEqual({ total: 0, days: [] });
+  });
+
+  it("groups by day, newest first, and skips skipped and removed logs", () => {
+    let p = shot();
+    p = take(p, "o1", "2026-11-02", 8, 5);
+    p = take(p, "o2", "2026-11-03", 8, 10);
+    p = take(p, "o3", "2026-11-03", 21, 30, { extra: true, amount: 10, unit: "units" });
+    p = take(p, "o4", "2026-11-04", 8, 0);
+    p = commitAdministration(p, { opId: "o5", kind: "skip", medId: "s", key: sKey("2026-11-01"), day: "2026-11-01", time: "08:00", actor }, NOW).patient;
+    p = commitAdministration(p, { opId: "o6", kind: "remove", medId: "s", key: sKey("2026-11-04"), actor }, NOW).patient;
+    const h = doseHistory(p.meds[0], p.doses);
+    expect(h.total).toBe(3);
+    expect(h.days.map(d => d.day)).toEqual(["2026-11-03", "2026-11-02"]);
+    expect(h.days[0].entries.map(e => [e.time, e.amount, e.extra])).toEqual([["21:30", "10 units", true], ["08:10", "40 units", false]]);
+    expect(h.days[1].entries.map(e => e.time)).toEqual(["08:05"]);
+  });
+
+  it("shows the corrected amount after an edit and ignores other medicines", () => {
+    let p = shot();
+    p = take(p, "o1", "2026-11-03", 8, 0);
+    p = commitAdministration(p, { opId: "o2", kind: "edit", medId: "s", key: sKey("2026-11-03"), amount: 36, unit: "units", at: new Date(2026, 10, 3, 8, 0).toISOString(), actor }, NOW).patient;
+    p.doses.other = { medId: "zzz", status: "taken", at: new Date(2026, 10, 3, 9, 0).toISOString() };
+    const h = doseHistory(p.meds[0], p.doses);
+    expect(h.total).toBe(1);
+    expect(h.days[0].entries[0]).toMatchObject({ amount: "36 units", edited: true });
+  });
+
+  it("labels injections as shots and everything else as doses", () => {
+    expect(historyNoun({ type: "injection" }).title).toBe("Shot history");
+    expect(historyCount({ type: "injection" }, 1)).toBe("1 shot");
+    expect(historyCount({ type: "injection" }, 3)).toBe("3 shots");
+    expect(historyCount({ type: "pill" }, 2)).toBe("2 doses");
+    expect(historyNoun({ type: "infusion" }).title).toBe("Dose history");
+    expect(historyCount({}, 0)).toBe("0 doses");
   });
 });

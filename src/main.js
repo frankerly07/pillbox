@@ -7,6 +7,7 @@ import { lookupPackageCode, searchDrugNames } from "./rxnav.js";
 import * as N from "./native.js";
 import { renderSVG } from "uqr";
 import { areaAfterTap, bodyMapHtml } from "./body-map.js";
+import { doseHistory, historyNoun, historyCount } from "./dose-log.js";
 
 const { esc, fmtTime, fmtClock, dayKey } = M;
 const $app = document.getElementById("app");
@@ -343,15 +344,33 @@ function supplyBar(m, doses) {
   return `<div class="meter ${s.low ? "low" : ""}" role="img" aria-label="${M.fmtNum(s.left)} of ${M.qty(full, s.unit)} left"><i style="width:${pct}%"></i></div>`;
 }
 const timesText = m => M.isPrn(m) ? "" : " · " + m.times.map(fmtTime).join(", ");
+// "3 shots" counter on a medicine row; opens Shot history (or Dose history for non-injections).
+function historyButton(m, doses) {
+  const n = doseHistory(m, doses).total, w = historyNoun(m);
+  return `<button class="btn-sm count-btn" data-act="med-history" data-med="${m.id}" aria-label="${esc(w.title)} for ${esc(m.name)}, ${historyCount(m, n)}"><span class="mono">${n}</span> ${n === 1 ? w.one : w.many}</button>`;
+}
+const fmtDay = key => { const d = M.parseDay(key), today = dayKey(new Date()), y = new Date(); y.setDate(y.getDate() - 1);
+  return key === today ? "Today" : key === dayKey(y) ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) }); };
+function historyView(pid, m) {
+  const p = snap(pid), h = doseHistory(m, p.doses), w = historyNoun(m);
+  return `<div class="row spread"><button class="btn-sm" data-act="history-close">‹ ${esc(m.name)}</button><button class="btn-sm" data-act="edit" data-med="${m.id}">Edit</button></div>
+   <section class="sheet stack"><div><div class="eyebrow">${esc(w.title)}</div><h2><span aria-hidden="true">${M.typeIcon(m)}</span> ${esc(m.name)} ${esc(m.strength)}</h2></div>
+     <div class="history-total"><span class="big mono">${h.total}</span> <span class="muted">${h.total === 1 ? w.one : w.many} taken</span></div>
+   </section>
+   ${h.total ? h.days.map(g => `<section class="stack-tight history-day"><h3>${esc(fmtDay(g.day))}</h3><div class="list">` + g.entries.map(e => `<div class="item"><span class="mono">${fmtClock(e.at)}</span><span class="history-amt">${esc(e.amount)}${e.extra ? ` <span class="chip">additional</span>` : ""}${e.edited ? ` <span class="chip">corrected</span>` : ""}</span></div>`).join("") + `</div></section>`).join("")
+     : `<div class="sheet empty-state"><strong>No ${w.many} yet</strong><div class="muted">${w.many === "shots" ? "Shots" : "Doses"} you log for ${esc(m.name)} show up here, newest first.</div></div>`}`;
+}
 function medsBlock(pid) {
   const p = snap(pid);
   if (S.editing) return medForm();
+  if (S.medHistory) { const m = p.meds.find(x => x.id === S.medHistory); if (m) return historyView(pid, m); S.medHistory = null; }
   if (S.medDetail) { const m = p.meds.find(x => x.id === S.medDetail); if (m) return medDetail(pid, m); S.medDetail = null; }
   const low = M.lowStock(p.meds, p.doses);
   return (low.length ? `<div class="banner dup"><div><strong>Refill soon:</strong> ${low.map(m => esc(m.name)).join(", ")}</div></div>` : "") +
-    `<div class="list">` + (p.meds.length ? p.meds.map(m => `<button class="item item-btn" data-act="med-open" data-med="${m.id}"><div class="row" style="flex-wrap:nowrap;min-width:0;width:100%"><span class="swatch" style="background:${esc(m.color)}"></span><div class="stack-tight" style="min-width:0;flex:1"><div><span aria-hidden="true">${M.typeIcon(m)}</span> <strong>${esc(m.name)}</strong> ${esc(m.strength)}</div>
+    `<div class="list">` + (p.meds.length ? p.meds.map(m => `<div class="med-row"><button class="item-btn" data-act="med-open" data-med="${m.id}"><div class="row" style="flex-wrap:nowrap;min-width:0;width:100%"><span class="swatch" style="background:${esc(m.color)}"></span><div class="stack-tight" style="min-width:0;flex:1"><div><span aria-hidden="true">${M.typeIcon(m)}</span> <strong>${esc(m.name)}</strong> ${esc(m.strength)}</div>
      <div class="muted">${esc(M.medSummary(m))}${timesText(m)}</div>
-     ${supplyBar(m, p.doses)}<div>${supplyLine(m, p.doses)}</div></div><span class="chev" aria-hidden="true">›</span></div></button>`).join("") : `<div class="item muted">No medicines yet.</div>`) + `</div>
+     ${supplyBar(m, p.doses)}<div>${supplyLine(m, p.doses)}</div></div><span class="chev" aria-hidden="true">›</span></div></button>
+     ${historyButton(m, p.doses)}</div>`).join("") : `<div class="item muted">No medicines yet.</div>`) + `</div>
     <div class="row"><button class="btn-primary" data-act="new">Add medicine</button></div>`;
 }
 function medDetail(pid, m) {
@@ -362,7 +381,7 @@ function medDetail(pid, m) {
     : s.left == null ? "Set a count to start tracking supply."
     : M.isPrn(m) ? "As-needed medicine, so there's no run-out date."
     : "Enough for every scheduled dose" + (m.end ? " until it ends." : " for now.");
-  return `<div class="row spread"><button class="btn-sm" data-act="med-close">‹ All medicines</button><button class="btn-sm" data-act="edit" data-med="${m.id}">Edit</button></div>
+  return `<div class="row spread"><button class="btn-sm" data-act="med-close">‹ All medicines</button><div class="row"><button class="btn-sm" data-act="med-history" data-med="${m.id}">${esc(historyNoun(m).title)}</button><button class="btn-sm" data-act="edit" data-med="${m.id}">Edit</button></div></div>
    <section class="sheet stack"><div><div class="eyebrow">${esc(M.medSummary(m))}</div><h2><span aria-hidden="true">${M.typeIcon(m)}</span> ${esc(m.name)} ${esc(m.strength)}</h2>
      ${!M.isPrn(m) ? `<div class="muted">${m.times.map(fmtTime).join(", ")}${m.start ? " · from " + fmtDate(M.parseDay(m.start)) : ""}${m.end ? " to " + fmtDate(M.parseDay(m.end)) : ""}</div>` : ""}
      ${m.prescribedBy ? `<div class="muted">Prescribed by ${esc(m.prescribedBy)}</div>` : ""}
@@ -727,7 +746,7 @@ function route() {
   S.view = valid.includes(h) ? h : valid[0];
   if (!isCare()) S.pid = S.patients.find(p => p.id === "me")?.id || S.patients.find(p => p.owner)?.id || S.pid;
   if (isCare() && (S.view !== "patients" || S.pid === "me")) S.pid = null;
-  S.editing = null; S.sheet = null; S.drug = null; N.stopBrowserScan(); S.joinError = ""; S.medDetail = null; S.stockForm = null;
+  S.editing = null; S.sheet = null; S.drug = null; N.stopBrowserScan(); S.joinError = ""; S.medDetail = null; S.medHistory = null; S.stockForm = null;
   render(); window.scrollTo(0, 0);
 }
 
@@ -889,10 +908,12 @@ document.addEventListener("click", async e => {
         break;
       }
       case "drug-scan": await beginPackageScan(); break;
-      case "edit": S.editing = M.normalizeMed(structuredClone(snap().meds.find(m => m.id === el.dataset.med))); break;
+      case "edit": S.medHistory = null; S.editing = M.normalizeMed(structuredClone(snap().meds.find(m => m.id === el.dataset.med))); break;
       case "cancel": S.drug = null; N.stopBrowserScan(); S.editing = null; break;
       case "med-open": S.medDetail = el.dataset.med; S.stockForm = null; window.scrollTo(0, 0); break;
-      case "med-close": S.medDetail = null; S.stockForm = null; break;
+      case "med-close": S.medDetail = null; S.medHistory = null; S.stockForm = null; break;
+      case "med-history": S.medDetail = el.dataset.med; S.medHistory = el.dataset.med; S.stockForm = null; window.scrollTo(0, 0); break;
+      case "history-close": S.medHistory = null; window.scrollTo(0, 0); break;
       case "stock-refill": S.stockForm = { mode: "refill" }; break;
       case "stock-adjust": S.stockForm = { mode: "adjust" }; break;
       case "stock-cancel": S.stockForm = null; break;
@@ -903,7 +924,7 @@ document.addEventListener("click", async e => {
         const next = { ...was, addToCalendar: !was.addToCalendar };
         const msg = await syncCalendar(was, next); await S.store.saveMed(S.pid, next); if (msg) toast(msg); break;
       }
-      case "delete": readForm(); if (!S.editing.confirmDelete) { S.editing.confirmDelete = true; break; } if (!isCare()) await N.removeMedFromCalendar(S.editing.calendarEventIds || []); await S.store.deleteMed(S.pid, S.editing.id); S.editing = null; S.medDetail = null; toast("Medicine deleted"); break;
+      case "delete": readForm(); if (!S.editing.confirmDelete) { S.editing.confirmDelete = true; break; } if (!isCare()) await N.removeMedFromCalendar(S.editing.calendarEventIds || []); await S.store.deleteMed(S.pid, S.editing.id); S.editing = null; S.medDetail = null; S.medHistory = null; toast("Medicine deleted"); break;
       case "perm": S.perm = await N.askReminderPermission(); if (!isCare()) await N.scheduleReminders(snap().meds, snap().doses); break;
       case "invite-perm": S.invite = await S.store.createInvite(S.pid, el.dataset.perm); break;
       case "invite-clear": S.invite = null; break;
@@ -972,7 +993,7 @@ document.addEventListener("click", async e => {
       case "sim": await lidOpened(Number(el.dataset.slot), "simulated"); break;
       case "open": S.pid = el.dataset.pid; S.sub = "today"; window.scrollTo(0, 0); break;
       case "back": S.pid = null; break;
-      case "sub": S.sub = el.dataset.sub; S.editing = null; S.medDetail = null; S.stockForm = null; break;
+      case "sub": S.sub = el.dataset.sub; S.editing = null; S.medDetail = null; S.medHistory = null; S.stockForm = null; break;
       case "go-link": location.hash = "link"; return;
       case "signout": await S.store.signOut(); S.user = null; S.snaps = {}; S.patients = []; break;
       case "auth-toggle": S.auth = { mode: S.auth.mode === "signup" ? "signin" : "signup", error: "" }; break;
