@@ -1,6 +1,19 @@
 // Pure dose logic shared by the patient and caregiver apps. No storage, no DOM.
 // Words come from i18n.js (English until the app picks a language).
-import { t, tn, fmtHM, weekdayShort } from "./i18n.js";
+import { t, tn, fmtHM, weekdayShort, TABLES } from "./i18n.js";
+
+/** Words in the example medicines. They are saved in the language the phone had when they were added. */
+export const SAMPLE_KEYS = ["vitD", "vitB12", "iu", "softgel", "tablet", "withBreakfast", "withFood", "prnMax", "shotSites", "doctor"].map(k => "sample." + k);
+/**
+ * Example-medicine text in the current language. A value that is exactly one
+ * of the example strings, in any language, is shown in the current one. Any
+ * other text is what the person typed and is returned unchanged.
+ */
+export function sampleText(v) {
+  if (!v || typeof v !== "string") return v;
+  for (const k of SAMPLE_KEYS) for (const tbl of Object.values(TABLES)) if (tbl[k] === v) return t(k);
+  return v;
+}
 
 export const pad = n => String(n).padStart(2, "0");
 export const dayKey = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
@@ -195,7 +208,7 @@ export function scheduleLabel(med) {
 // "40 units", "2 pills"; old pill medicines keep their own wording ("1 softgel") while it still matches.
 export function doseLabel(med) {
   const m = normalizeMed(med);
-  if (m.type === "pill" && m.perDose && parseFloat(m.perDose) === m.doseAmount) return m.perDose;
+  if (m.type === "pill" && m.perDose && parseFloat(m.perDose) === m.doseAmount) return sampleText(m.perDose);
   return qty(m.doseAmount, m.doseUnit);
 }
 export const typeIcon = med => TYPES[normalizeMed(med).type].icon;
@@ -527,7 +540,7 @@ export function calendarStarts(med, doses = {}, now = Date.now()) {
   return [];
 }
 /** "Take 2 pills (daily)." plus the medicine's notes; used for calendar events. */
-export const calendarDescription = med => t("cal.take", { dose: doseLabel(med), sched: scheduleLabel(med) }) + (med.notes ? " " + med.notes : "");
+export const calendarDescription = med => t("cal.take", { dose: doseLabel(med), sched: scheduleLabel(med) }) + (med.notes ? " " + sampleText(med.notes) : "");
 export const calendarTitle = med => typeIcon(med) + " " + [med.name, med.strength].filter(Boolean).join(" ") + " (" + doseLabel(med) + ")";
 /** An .ics file with one repeating event per time of day. "" for as-needed medicines. */
 export function medToIcs(med, doses = {}, now = Date.now()) {

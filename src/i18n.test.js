@@ -5,7 +5,7 @@ import {
 } from "./i18n.js";
 import * as M from "./model.js";
 import { historyNoun, historyCount } from "./dose-log.js";
-import { bodyMapHtml, hotspotsFor, labelBox, FIGURE } from "./body-map.js";
+import { bodyMapHtml, hotspotsFor, labelBox, labelLines, FIGURE } from "./body-map.js";
 
 const { en, es } = TABLES;
 const vars = s => [...String(s).matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort();
@@ -36,7 +36,7 @@ describe("string tables", () => {
   });
 
   it("has a string for every key the app code asks for", () => {
-    const files = ["main.js", "model.js", "dose-log.js", "body-map.js", "native.js", "migrate.js"];
+    const files = ["main.js", "model.js", "dose-log.js", "body-map.js", "native.js", "migrate.js", "store.js", "reminders.js"];
     const missing = [];
     for (const f of files) {
       const src = readFileSync(new URL("./" + f, import.meta.url), "utf8");
@@ -181,7 +181,7 @@ describe("Spanish screens", () => {
       expect(page).toContain("Toca dónde pasó");
       const spots = hotspotsFor(figure);
       for (const h of spots) {
-        expect(page).toContain(`>${h.text}<`);
+        expect(page).toContain(`>${labelLines(h.text).join("<br>")}<`);
         const b = labelBox(h);
         expect(b.l, figure + " " + h.area).toBeGreaterThanOrEqual(FIGURE.minX);
         expect(b.r, figure + " " + h.area).toBeLessThanOrEqual(FIGURE.minX + FIGURE.w);
@@ -189,5 +189,26 @@ describe("Spanish screens", () => {
       for (let i = 0; i < spots.length; i++) for (let j = i + 1; j < spots.length; j++)
         expect(overlaps(labelBox(spots[i]), labelBox(spots[j])), `${figure} ${spots[i].text} / ${spots[j].text}`).toBe(false);
     }
+  });
+  it("uses full Spanish names on the body chart, not abbreviations", () => {
+    setLang("es");
+    const shortKeys = Object.keys(es).filter(k => k.startsWith("bodyShort."));
+    expect(shortKeys.length).toBeGreaterThan(10);
+    for (const k of shortKeys) expect(es[k], k).not.toMatch(/\./);
+    expect(es["bodyShort.forearm"]).toBe("Antebrazo");
+    const forearm = hotspotsFor("male").find(h => h.point === "forearm");
+    expect(forearm.text).toBe("Antebrazo");
+    expect(forearm.size).toBe("small");
+    expect(bodyMapHtml("", "accent", "male")).toContain('class="name pos-start small">Antebrazo<');
+  });
+  it("wraps a long label with spaces onto two lines and keeps one word on one line", () => {
+    expect(labelLines("Abdomen inferior izquierdo")).toEqual(["Abdomen inferior", "izquierdo"]);
+    expect(labelLines("Parte superior")).toEqual(["Parte", "superior"]);
+    expect(labelLines("Antebrazo")).toEqual(["Antebrazo"]);
+    expect(labelLines("Mano der")).toEqual(["Mano der"]);
+    const one = labelBox({ text: "Abdomen inferior", cx: 100, cy: 200, anchor: "end" });
+    const wide = labelBox({ text: "Abdominal inferior", cx: 100, cy: 200, anchor: "end" });
+    expect(one.b - one.t).toBeGreaterThan(12);
+    expect(wide.r - wide.l).toBeLessThan("Abdominal inferior".length * 6.4);
   });
 });

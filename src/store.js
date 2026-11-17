@@ -7,17 +7,21 @@ import { commitAdministration } from "./dose-log.js";
 import { planDoseCommit } from "./cloud-handlers.js";
 import { buildBackup, emptyPatient, migrateLocalData, planImport } from "./migrate.js";
 import { firebaseConfig } from "./firebase-config.js";
+import { t } from "./i18n.js";
 
 const listeners = () => new Set();
 const LKEY = "pillbox.v2";
-const NOT_DEPLOYED = "This needs a PillAlly Cloud Function, which is not deployed. Deploying it requires the Firebase Blaze plan (billing). This app does not enable billing, so the action was not done.";
+// Messages people can see, in the current language.
+const NOT_DEPLOYED = () => t("err.notDeployed");
+const NEEDS_SYNC = () => t("err.needsSync");
 
-function sampleMeds(start = dayKey(new Date())) {
+/** Example medicines for a new phone, worded in the current language. */
+export function sampleMeds(start = dayKey(new Date())) {
   return [
-    { id: uid(), name: "Vitamin D3", strength: "1000 IU", perDose: "1 softgel", times: ["08:00"], stock: 42, fullCount: 90, refillAt: 10, slot: 1, color: COLORS[0], notes: "With breakfast" },
-    { id: uid(), name: "Metformin", strength: "500 mg", perDose: "1 tablet", times: ["08:00", "20:00"], stock: 9, fullCount: 60, refillAt: 10, slot: 2, prescribedBy: "Dr. Patel (example)", color: COLORS[1], notes: "Take with food" },
-    { id: uid(), name: "Ibuprofen", strength: "200 mg", perDose: "1 tablet", times: [], stock: 30, fullCount: 50, refillAt: 6, slot: 3, color: COLORS[2], notes: "As needed, max 3 per day" },
-    { id: uid(), name: "Vitamin B12", type: "injection", strength: "1000 mcg/mL", doseAmount: 1, doseUnit: "mL", supplyUnit: "vials", times: ["09:00"], schedule: { kind: "everyNWeeks", n: 2 }, stock: 3, fullCount: 5, refillAt: 1, refillDays: 14, color: COLORS[3], notes: "Upper arm, alternate sides" },
+    { id: uid(), name: t("sample.vitD"), strength: t("sample.iu"), perDose: t("sample.softgel"), times: ["08:00"], stock: 42, fullCount: 90, refillAt: 10, slot: 1, color: COLORS[0], notes: t("sample.withBreakfast") },
+    { id: uid(), name: "Metformin", strength: "500 mg", perDose: t("sample.tablet"), times: ["08:00", "20:00"], stock: 9, fullCount: 60, refillAt: 10, slot: 2, prescribedBy: t("sample.doctor"), color: COLORS[1], notes: t("sample.withFood") },
+    { id: uid(), name: "Ibuprofen", strength: "200 mg", perDose: t("sample.tablet"), times: [], stock: 30, fullCount: 50, refillAt: 6, slot: 3, color: COLORS[2], notes: t("sample.prnMax") },
+    { id: uid(), name: t("sample.vitB12"), type: "injection", strength: "1000 mcg/mL", doseAmount: 1, doseUnit: "mL", supplyUnit: "vials", times: ["09:00"], schedule: { kind: "everyNWeeks", n: 2 }, stock: 3, fullCount: 5, refillAt: 1, refillDays: 14, color: COLORS[3], notes: t("sample.shotSites") },
   ].map(m => normalizeMed({ ...m, start }));
 }
 function defined(obj) {
@@ -153,7 +157,7 @@ export class LocalStore {
   async clearDose(pid, key) { delete this.data.patients[pid].doses[key]; this.emit(pid); }
   async commitDose(pid, cmd) {
     const p = this.data.patients[pid];
-    if (!p) return { ok: false, code: "not-found", message: "That record isn't on this phone.", delta: 0 };
+    if (!p) return { ok: false, code: "not-found", message: t("commit.not-found"), delta: 0 };
     const result = commitAdministration(p, cmd, cmd.now || Date.now());
     if (result.code === "applied") {
       this.data.patients[pid] = result.patient;
@@ -189,9 +193,9 @@ export class LocalStore {
     }
     this.emit(pid);
   }
-  async createInvite() { throw new Error(syncStatus(this).detail); }
-  async previewInvite() { throw new Error(syncStatus(this).detail); }
-  async acceptInvite() { throw new Error(syncStatus(this).detail); }
+  async createInvite() { throw new Error(t("sync.phone.detail")); }
+  async previewInvite() { throw new Error(t("sync.phone.detail")); }
+  async acceptInvite() { throw new Error(t("sync.phone.detail")); }
   async createLinkCode() { return this.createInvite(); }
   async joinWithCode() { return this.acceptInvite(); }
   async removeCaregiver(pid, cuid) {
@@ -203,14 +207,14 @@ export class LocalStore {
     this.emit(pid);
   }
   async signOut() {}
-  async signUp() { throw new Error("Accounts need sync, which isn't set up."); }
-  async signIn() { throw new Error("Accounts need sync, which isn't set up."); }
-  async resetPassword() { throw new Error("Accounts need sync, which isn't set up."); }
+  async signUp() { throw new Error(NEEDS_SYNC()); }
+  async signIn() { throw new Error(NEEDS_SYNC()); }
+  async resetPassword() { throw new Error(NEEDS_SYNC()); }
 }
 
 function notDeployed(err) {
   const code = String(err && err.code || "");
-  if (code.includes("not-found") || code.includes("unavailable") || code.includes("internal") || code.includes("functions/")) return new Error(NOT_DEPLOYED);
+  if (code.includes("not-found") || code.includes("unavailable") || code.includes("internal") || code.includes("functions/")) return new Error(NOT_DEPLOYED());
   return err;
 }
 
@@ -309,7 +313,7 @@ export class CloudStore {
     return () => unsubs.forEach(u => u());
   }
   ownerGuard(pid) {
-    if (pid !== this.user.uid) throw new Error("Changing someone else's record is done by the dose function, which is not deployed. You can still view. " + NOT_DEPLOYED);
+    if (pid !== this.user.uid) throw new Error(t("err.ownerOnly") + " " + NOT_DEPLOYED());
   }
   async saveMed(pid, med) {
     this.ownerGuard(pid);
@@ -362,11 +366,11 @@ export class CloudStore {
   async createInvite(pid, permission) { return this.callFn("createInvite", { patientId: pid, permission, patientName: this.user.name }); }
   async previewInvite(codeText) { return this.callFn("previewInvite", { codeText }); }
   async acceptInvite(codeText) { return this.callFn("acceptInvite", { codeText, caregiverName: this.user.name }); }
-  async createLinkCode() { throw new Error(NOT_DEPLOYED); }
-  async joinWithCode() { throw new Error(NOT_DEPLOYED); }
+  async createLinkCode() { throw new Error(NOT_DEPLOYED()); }
+  async joinWithCode() { throw new Error(NOT_DEPLOYED()); }
   async removeCaregiver(pid, cuid) { return this.callFn("revokeCaregiver", { pid, caregiverUid: cuid }); }
   exportBackup() { return null; }
-  importBackup() { return { ok: false, message: "Import a backup from the on-this-phone screen. A signed-in account keeps its own cloud record." }; }
+  importBackup() { return { ok: false, message: t("err.importLocalOnly") }; }
 }
 
 export function makeStore(opts = {}) {
