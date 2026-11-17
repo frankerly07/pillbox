@@ -5,6 +5,7 @@ import { PERMISSIONS } from "./access.js";
 import { applyCatalogChoice } from "./drug-catalog.js";
 import { lookupPackageCode, searchDrugNames } from "./rxnav.js";
 import * as N from "./native.js";
+import * as R from "./reminders.js";
 import { renderSVG } from "uqr";
 import { areaAfterTap, bodyMapHtml } from "./body-map.js";
 import { doseHistory, historyNoun, historyCount } from "./dose-log.js";
@@ -21,11 +22,10 @@ const S = {
   view: "today", sub: "today", onboardStep: "role",
   cal: { y: new Date().getFullYear(), m: new Date().getMonth(), sel: dayKey(new Date()) },
   editing: null, sheet: null, drug: null, alert: null, ble: "", invite: null, invitePreview: null, auth: { mode: "signin", error: "" },
-  settings: loadSettings(), perm: "default",
+  settings: R.loadSettings(), perm: "default", allBusy: false,
 };
-function loadSettings() { try { return { dueWindowMin: 60, bodyFigure: "male", ...JSON.parse(localStorage.getItem("pillbox.settings") || "{}") }; } catch (e) { return { dueWindowMin: 60, bodyFigure: "male" }; } }
 function bodyFigure() { return S.settings.bodyFigure === "female" ? "female" : "male"; }
-function saveSettings() { try { localStorage.setItem("pillbox.settings", JSON.stringify(S.settings)); } catch (e) {} }
+function saveSettings() { R.saveSettings(S.settings); }
 const opts = () => ({ now: Date.now(), dueWindowMin: S.settings.dueWindowMin });
 const snap = (pid = S.pid) => S.snaps[pid] || { meds: [], doses: {}, events: {}, name: "" };
 // Background redraws (new data, 30 s tick) wait while a form is open, so typing and focus aren't lost.
@@ -399,9 +399,9 @@ function medDetail(pid, m) {
   return `<div class="row spread"><button class="btn-sm" data-act="med-close">‹ ${esc(t("meds.all"))}</button><div class="row"><button class="btn-sm" data-act="med-history" data-med="${m.id}">${esc(historyNoun(m).title)}</button><button class="btn-sm" data-act="edit" data-med="${m.id}">${esc(t("btn.edit"))}</button></div></div>
    <section class="sheet stack"><div><div class="eyebrow">${esc(M.medSummary(m))}</div><h2><span aria-hidden="true">${M.typeIcon(m)}</span> ${esc(m.name)} ${esc(m.strength)}</h2>
      ${!M.isPrn(m) ? `<div class="muted">${m.times.map(fmtTime).join(", ")}${esc(m.start ? " · " + t("meds.from", { date: fmtDate(M.parseDay(m.start)) }) : "")}${esc(m.end ? " " + t("meds.to", { date: fmtDate(M.parseDay(m.end)) }) : "")}</div>` : ""}
-     ${m.prescribedBy ? `<div class="muted">${esc(t("meds.prescribedBy", { name: m.prescribedBy }))}</div>` : ""}
+     ${m.prescribedBy ? `<div class="muted">${esc(t("meds.prescribedBy", { name: M.sampleText(m.prescribedBy) }))}</div>` : ""}
      ${m.catalog?.rxcui ? `<div class="muted small">${esc(t("meds.rxnorm", { id: m.catalog.rxcui, ndc: m.catalog.ndc ? " · NDC " + m.catalog.ndc : "" }))}</div>` : ""}
-     ${m.updatedByName ? `<div class="muted small">${esc(t("meds.lastChangedBy", { name: m.updatedByName }) + (m.updatedByRole === "caregiver" ? " " + t("meds.careTeamParen") : "") + (m.updatedAt ? " " + t("meds.onDate", { date: fmtDate(new Date(m.updatedAt)) }) : ""))}</div>` : ""}</div>
+     ${m.updatedByName ? `<div class="muted small">${esc(t("meds.lastChangedBy", { name: m.updatedByName === "Me" ? t("common.me") : m.updatedByName }) + (m.updatedByRole === "caregiver" ? " " + t("meds.careTeamParen") : "") + (m.updatedAt ? " " + t("meds.onDate", { date: fmtDate(new Date(m.updatedAt)) }) : ""))}</div>` : ""}</div>
      <div class="row spread" style="flex-wrap:nowrap"><div><strong>${esc(t("add.title"))}</strong><div class="muted small">${esc(t("meds.logActualHelp"))}</div></div><button class="btn-sm" data-act="log-additional" data-pid="${pid}" data-med="${m.id}">${esc(t("btn.log"))}</button></div>
      ${!isCare() && !M.isPrn(m) ? `<div class="row spread" style="flex-wrap:nowrap"><div><strong>${esc(t("meds.addToCal"))}</strong><div class="muted small">${esc(t(m.addToCalendar ? (m.calendarEventIds?.length ? "meds.calOnDevice" : "meds.calOnFile") : "meds.calOff"))}</div></div>
        <button class="btn-sm ${m.addToCalendar ? "" : "btn-primary"}" role="switch" aria-checked="${!!m.addToCalendar}" data-act="cal-toggle" data-med="${m.id}">${esc(t(m.addToCalendar ? "btn.turnOff" : "btn.turnOn"))}</button></div>` : ""}
@@ -514,6 +514,15 @@ function remindersCard() {
   const label = key ? t(key) : S.perm;
   return `<div class="row spread"><div><strong>${esc(t(isCare() ? "perm.careTitle" : "perm.title"))}</strong><div class="muted">${esc(label)}</div></div>${S.perm === "granted" ? "" : `<button class="btn-sm btn-primary" data-act="perm">${esc(t("btn.turnOn"))}</button>`}</div>`;
 }
+// Patient app: start new medicines with "Add to my calendar" on, and one tap for alarms + calendar on all of them.
+function calendarSettingsCard() {
+  if (isCare()) return "";
+  const on = !!S.settings.calendarForNewMeds;
+  return `<div class="row spread" style="flex-wrap:nowrap"><div><strong id="cal-new-l">${esc(t("rem.newMedsTitle"))}</strong><div class="muted small">${esc(t(on ? "rem.newMedsOn" : "rem.newMedsOff"))}</div></div>
+    <button class="btn-sm ${on ? "" : "btn-primary"}" role="switch" aria-checked="${on}" aria-labelledby="cal-new-l" data-act="cal-new-toggle">${esc(t(on ? "btn.turnOff" : "btn.turnOn"))}</button></div>
+    <div class="stack-tight"><button class="btn-primary" data-act="all-reminders" ${S.allBusy ? "disabled" : ""}>${esc(t(S.allBusy ? "rem.allWorking" : "rem.allButton"))}</button>
+    <div class="muted small">${esc(t("rem.allHelp"))}</div></div>`;
+}
 function accountCard() {
   if (S.store.mode !== "cloud") return `<div class="row spread"><div><strong>${esc(t("acct.sync"))}</strong><div class="muted">${esc(t("acct.syncOff"))}</div></div></div>`;
   return `<div class="row spread"><div><strong>${esc(S.user.name)}</strong><div class="muted">${esc(S.user.email || "")}</div></div><button class="btn-sm" data-act="signout">${esc(t("acct.signOut"))}</button></div>`;
@@ -532,7 +541,7 @@ function patientView() {
         <p class="muted">${esc(t("box.test"))}</p>
         ${p.meds.filter(m => m.slot).length ? `<div class="pack">` + p.meds.filter(m => m.slot).sort((a, b) => a.slot - b.slot).map(m => `<button class="well" data-act="sim" data-slot="${m.slot}"><span class="time">${esc(t("box.slot", { n: m.slot }))}</span><span class="name">${esc(m.name)}</span><span class="dose">${esc(t("box.openLid"))}</span></button>`).join("") + `</div>` : `<p class="muted">${esc(t("box.assignFirst"))}</p>`}
       </section>
-      <section class="sheet stack"><h2>${esc(t("nav.settings"))}</h2>${languageCard()}${settingsExtras()}${remindersCard()}${accountCard()}</section></div>`;
+      <section class="sheet stack"><h2>${esc(t("nav.settings"))}</h2>${languageCard()}${settingsExtras()}${remindersCard()}${calendarSettingsCard()}${accountCard()}</section></div>`;
     default: return header(t("nav.today"), longDate(now)) + `<div class="stack">${viewSwitch()}${legacyBanner()}${alertBanner()}${exampleBanner()}${todayBlock(pid)}</div>`;
   }
 }
@@ -754,7 +763,7 @@ function sheetView() {
       <button data-act="edit-time" data-pid="${pid}" data-key="${d.key}">${esc(t("sheet.another"))}</button>
       <button class="btn-quiet" data-act="skip" data-pid="${pid}" data-key="${d.key}">${esc(t("sheet.skip"))}</button>
       <p class="muted small">${esc(t("sheet.skipHelp"))}</p>`;
-  return wrap(`<div class="eyebrow">${esc(M.medSummary(d.med))}</div><h2>${esc(d.med.name)} ${esc(d.med.strength)}</h2>${d.med.notes ? `<div class="muted">${esc(d.med.notes)}</div>` : ""}
+  return wrap(`<div class="eyebrow">${esc(M.medSummary(d.med))}</div><h2>${esc(d.med.name)} ${esc(d.med.strength)}</h2>${d.med.notes ? `<div class="muted">${esc(M.sampleText(d.med.notes))}</div>` : ""}
     <p class="dose-times"><strong>${esc(M.fmtDoseTimes(d))}</strong>${who}</p>${actions}`);
 }
 function route() {
@@ -891,7 +900,7 @@ document.addEventListener("click", async e => {
       case "cal-prev": S.cal.m--; if (S.cal.m < 0) { S.cal.m = 11; S.cal.y--; } break;
       case "cal-next": S.cal.m++; if (S.cal.m > 11) { S.cal.m = 0; S.cal.y++; } break;
       case "cal-sel": S.cal.sel = el.dataset.day; render(); document.getElementById("day-detail")?.scrollIntoView({ behavior: "smooth", block: "start" }); return;
-      case "new": S.drug = null; S.editing = { ...M.normalizeMed({ id: M.uid(), name: "", strength: "", type: "pill", doseAmount: 1, times: ["08:00"], schedule: { kind: "daily" }, start: dayKey(new Date()), stock: 30, refillAt: 5, slot: null, notes: "", color: M.COLORS[snap().meds.length % M.COLORS.length] }), isNew: true }; break;
+      case "new": S.drug = null; S.editing = { ...M.normalizeMed({ id: M.uid(), name: "", strength: "", type: "pill", doseAmount: 1, times: ["08:00"], schedule: { kind: "daily" }, start: dayKey(new Date()), stock: 30, refillAt: 5, slot: null, notes: "", color: M.COLORS[snap().meds.length % M.COLORS.length] }), addToCalendar: !isCare() && R.calendarOnForNewMed(S.settings), isNew: true }; break;
       case "drug-open": readForm(); S.drug = { step: "search", query: (document.getElementById("drug-q")?.value || S.editing?.name || ""), message: "", choices: S.drug?.choices || [] }; break;
       case "drug-close": S.drug = null; N.stopBrowserScan(); break;
       case "drug-back": if (S.drug) S.drug.step = S.drug.choices?.length ? "results" : "search"; break;
@@ -944,6 +953,23 @@ document.addEventListener("click", async e => {
       }
       case "delete": readForm(); if (!S.editing.confirmDelete) { S.editing.confirmDelete = true; break; } if (!isCare()) await N.removeMedFromCalendar(S.editing.calendarEventIds || []); await S.store.deleteMed(S.pid, S.editing.id); S.editing = null; S.medDetail = null; S.medHistory = null; toast(t("toast.medDeleted")); break;
       case "perm": S.perm = await N.askReminderPermission(); if (!isCare()) await N.scheduleReminders(snap().meds, snap().doses); break;
+      case "cal-new-toggle": S.settings.calendarForNewMeds = !S.settings.calendarForNewMeds; saveSettings(); break;
+      case "all-reminders": {
+        if (isCare() || S.allBusy) break;
+        S.allBusy = true; render();
+        try {
+          const res = await R.turnOnAllReminders({
+            meds: snap().meds, doses: snap().doses, onPhone: N.isNative,
+            askPermission: N.askReminderPermission,
+            scheduleReminders: N.scheduleReminders,
+            addToCalendar: (m, doses) => N.addMedToCalendar(m, doses, { fallback: false }),
+            saveMed: m => S.store.saveMed(S.pid, m),
+          });
+          S.perm = res.perm;
+          toast(R.allRemindersMessage(res));
+        } finally { S.allBusy = false; }
+        break;
+      }
       case "invite-perm": S.invite = await S.store.createInvite(S.pid, el.dataset.perm); break;
       case "invite-clear": S.invite = null; break;
       case "invite-accept": {

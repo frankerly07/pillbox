@@ -1,5 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { LocalStore } from "./store.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { LocalStore, sampleMeds } from "./store.js";
+import { setLang } from "./i18n.js";
+import { doseLabel, sampleText, calendarDescription } from "./model.js";
+
+afterEach(() => setLang("en"));
 
 beforeEach(() => {
   const mem = new Map();
@@ -43,5 +47,63 @@ describe("LocalStore", () => {
     expect(retry.code).toBe("replay");
     expect(store.data.patients.me.meds[0].stock).toBe(4);
     await expect(store.createInvite()).rejects.toThrow(/this phone/i);
+  });
+
+  it("gives its messages in the current language", async () => {
+    setLang("es");
+    const store = new LocalStore({});
+    await expect(store.createInvite()).rejects.toThrow(/este teléfono/);
+    await expect(store.signIn()).rejects.toThrow(/sincronización/);
+    expect((await store.commitDose("nobody", {})).message).toBe("Ese registro no está en este teléfono.");
+  });
+});
+
+describe("example medicines", () => {
+  it("are worded in English on an English phone, as before", () => {
+    const meds = sampleMeds("2026-11-17");
+    expect(meds.map(m => m.name)).toEqual(["Vitamin D3", "Metformin", "Ibuprofen", "Vitamin B12"]);
+    expect(meds[1]).toMatchObject({ perDose: "1 tablet", notes: "Take with food", prescribedBy: "Dr. Patel (example)" });
+    expect(meds[2].notes).toBe("As needed, max 3 per day");
+    expect(doseLabel(meds[0])).toBe("1 softgel");
+  });
+
+  it("are worded in Spanish when the phone is in Spanish", () => {
+    setLang("es");
+    const store = new LocalStore({});
+    store.applyProfile({ usePatient: true, useCaregiver: false, recommended: "skip" });
+    expect(store.example).toBe(true);
+    const meds = store.data.patients.me.meds;
+    expect(meds.map(m => m.name)).toEqual(["Vitamina D3", "Metformin", "Ibuprofen", "Vitamina B12"]);
+    expect(meds[1]).toMatchObject({ perDose: "1 tableta", notes: "Tomar con comida", prescribedBy: "Dr. Patel (ejemplo)" });
+    expect(meds[2].notes).toBe("Cuando se necesite, máximo 3 al día");
+    expect(meds[3].notes).toBe("Parte superior del brazo, alternar lados");
+    expect(doseLabel(meds[1])).toBe("1 tableta");
+  });
+
+  it("are shown in the current language when they were saved in the other one", () => {
+    const meds = sampleMeds("2026-11-17");
+    setLang("es");
+    expect(doseLabel(meds[0])).toBe("1 cápsula blanda");
+    expect(sampleText(meds[1].notes)).toBe("Tomar con comida");
+    expect(sampleText(meds[1].prescribedBy)).toBe("Dr. Patel (ejemplo)");
+    expect(calendarDescription(meds[1])).toMatch(/Tomar con comida$/);
+    setLang("en");
+    expect(sampleText("Tomar con comida")).toBe("Take with food");
+  });
+
+  it("leaves what people typed alone", () => {
+    setLang("es");
+    for (const v of ["Take with food please", "2 tablets", "Dr. Patel", "", null, undefined, 3]) expect(sampleText(v)).toBe(v);
+    expect(doseLabel({ type: "pill", perDose: "2 tablets", doseAmount: 2 })).toBe("2 tablets");
+  });
+
+  it("does not change saved medicines when the store loads", () => {
+    localStorage.setItem("pillbox.v2", JSON.stringify({
+      role: "patient",
+      patients: { me: { id: "me", name: "Me", meds: [{ id: "x", name: "Real", times: ["08:00"], perDose: "1 tablet", notes: "Take with food", stock: 5 }], doses: {} } },
+    }));
+    setLang("es");
+    const store = new LocalStore({});
+    expect(store.data.patients.me.meds[0]).toMatchObject({ perDose: "1 tablet", notes: "Take with food" });
   });
 });

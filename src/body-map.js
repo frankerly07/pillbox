@@ -27,6 +27,10 @@ const BODY_W = 200;
 const BODY_H = 520;
 /** Room beside the outline so the short labels are not clipped. */
 const PAD_X = 30;
+/** Labels longer than this many characters use the smaller font. */
+const LONG_LABEL = 8;
+/** Smaller font as a share of the normal one (10px → 8.5px in style.css). */
+const SMALL_SCALE = 0.85;
 
 export const FIGURE = { w: BODY_W + PAD_X * 2, h: BODY_H, midX: BODY_W / 2, minX: -PAD_X };
 
@@ -96,6 +100,7 @@ function hotspot(point) {
     hw: HIT,
     hh: HIT,
     text: shortName(point.label),
+    size: labelSize(shortName(point.label)),
     // Limb names sit outside the arm or leg. Chest sits above its dot so it
     // clears the pectoral line. Groin sits above its dot so it clears the hips.
     anchor: point.label === "groin" || point.label === "chest" ? "above" : point.side === "right" ? "start" : "end",
@@ -149,12 +154,33 @@ const LABEL_CHAR = 6.4;
 const LABEL_H = 12;
 const LABEL_GAP = 8;
 
+/**
+ * Lines a label is drawn on. A one-word label stays on one line. A long
+ * label with spaces wraps onto two lines at the space nearest the middle,
+ * so a full name ("Abdomen inferior") fits beside the figure.
+ */
+export function labelLines(text) {
+  const s = String(text || "");
+  if (s.length <= LONG_LABEL || !s.includes(" ")) return [s];
+  let best = -1;
+  for (let i = s.indexOf(" "); i >= 0; i = s.indexOf(" ", i + 1))
+    if (best < 0 || Math.abs(i - s.length / 2) < Math.abs(best - s.length / 2)) best = i;
+  return [s.slice(0, best), s.slice(best + 1)];
+}
+
+/** "small" for a long label, otherwise "". */
+export function labelSize(text) {
+  return String(text || "").length > LONG_LABEL ? "small" : "";
+}
+
 /** Where the short label sits, in the design's viewBox units. */
 export function labelBox(h) {
-  const w = Math.max(String(h.text || "").length, 1) * LABEL_CHAR;
-  const half = LABEL_H / 2;
+  const lines = labelLines(h.text);
+  const scale = labelSize(h.text) === "small" ? SMALL_SCALE : 1;
+  const w = Math.max(...lines.map(l => l.length), 1) * LABEL_CHAR * scale;
+  const half = (LABEL_H * scale * lines.length) / 2;
   if (h.anchor === "start") return { l: h.cx - LABEL_GAP - w, r: h.cx - LABEL_GAP, t: h.cy - half, b: h.cy + half };
-  if (h.anchor === "above") return { l: h.cx - w / 2, r: h.cx + w / 2, t: h.cy - LABEL_GAP - LABEL_H, b: h.cy - LABEL_GAP };
+  if (h.anchor === "above") return { l: h.cx - w / 2, r: h.cx + w / 2, t: h.cy - LABEL_GAP - half * 2, b: h.cy - LABEL_GAP };
   return { l: h.cx + LABEL_GAP, r: h.cx + LABEL_GAP + w, t: h.cy - half, b: h.cy + half };
 }
 
@@ -231,7 +257,7 @@ function hitButton(h, selectedIds) {
     `width:${(h.hw / FIGURE.w * 100).toFixed(2)}%`,
     `height:${(h.hh / FIGURE.h * 100).toFixed(2)}%`,
   ].join(";");
-  return `<button type="button" class="body-hit dot" data-act="ev-area" data-area="${h.area}" data-side="${h.side || ""}" aria-pressed="${pressed ? "true" : "false"}" aria-label="${esc(hotspotName(h))}" style="${style}"><span class="mark"></span><span class="name pos-${h.anchor}">${esc(h.text)}</span></button>`;
+  return `<button type="button" class="body-hit dot" data-act="ev-area" data-area="${h.area}" data-side="${h.side || ""}" aria-pressed="${pressed ? "true" : "false"}" aria-label="${esc(hotspotName(h))}" style="${style}"><span class="mark"></span><span class="name pos-${h.anchor}${h.size ? " " + h.size : ""}">${labelLines(h.text).map(esc).join("<br>")}</span></button>`;
 }
 
 /**

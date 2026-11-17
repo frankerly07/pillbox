@@ -158,9 +158,13 @@ let CAL = null;
 async function loadCal() { if (!CAL) CAL = (await import("@ebarooni/capacitor-calendar")).CapacitorCalendar; }
 
 const DAY_TO_PLUGIN = [7, 1, 2, 3, 4, 5, 6]; // JS Sunday=0 → plugin Monday=1 … Sunday=7
-export async function addMedToCalendar(med, doses = {}) {
+// opts.fallback = false (used by "Turn on alarms and calendar for all"): no .ics share or download. A refused
+// permission returns { ok: false, denied: true }, and anywhere else that fails returns { ok: false }.
+export async function addMedToCalendar(med, doses = {}, opts = {}) {
+  const fallback = opts.fallback !== false;
   const starts = calendarStarts(med, doses), r = recurrenceOf(med, doses);
   if (!starts.length || !r) return { ok: false, method: "none", ids: [], message: t("cal.nothingToAdd") };
+  if (!fallback && !isNative) return { ok: false, method: "none", ids: [], notPhone: true, message: t("rem.calNotPhone") };
   if (isNative) {
     let denied = false;
     try {
@@ -187,6 +191,7 @@ export async function addMedToCalendar(med, doses = {}) {
         return { ok: true, method: "device", ids, message: t("cal.added") };
       }
     } catch (e) {}
+    if (!fallback) return { ok: false, method: "none", ids: [], denied, message: t(denied ? "rem.calDenied" : "rem.calError") };
     const shared = await shareIcs(med, doses);
     if (denied) return { ...shared, message: shared.ok ? t("cal.noPermFile") : t("cal.noPerm") };
     return shared;
