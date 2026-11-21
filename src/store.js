@@ -11,6 +11,20 @@ import { t } from "./i18n.js";
 
 const listeners = () => new Set();
 const LKEY = "pillbox.v2";
+/** Where unreadable saved data is copied before anything new is written over it. */
+export const RESCUE_KEY = LKEY + ".unreadable";
+/** A copy of this phone's records taken just before a backup file is imported. */
+export const PRE_IMPORT_KEY = LKEY + ".before-import";
+
+/** JSON from storage, or `fallback` when it is missing, unreadable, or storage is not available. Never throws. */
+export function readJson(key, fallback = null, storage = globalThis.localStorage) {
+  try {
+    const text = storage?.getItem(key);
+    if (text == null) return fallback;
+    const v = JSON.parse(text);
+    return v ?? fallback;
+  } catch (e) { return fallback; }
+}
 // Messages people can see, in the current language.
 const NOT_DEPLOYED = () => t("err.notDeployed");
 const NEEDS_SYNC = () => t("err.needsSync");
@@ -49,9 +63,16 @@ export class LocalStore {
     this.legacyCarePackage = !!opts.legacyCarePackage;
     this.subs = new Map();
     this.listSubs = listeners();
-    let raw = null;
-    try { raw = JSON.parse(localStorage.getItem(LKEY)); } catch (e) {}
+    this.onSaveError = null;
+    let raw = null, text = null;
+    try { text = localStorage.getItem(LKEY); } catch (e) {}
+    try { raw = JSON.parse(text); } catch (e) { raw = null; }
     const data = migrateLocalData(raw, { legacyCarePackage: this.legacyCarePackage });
+    // Saved text that can't be read as records is kept under another key, so starting over
+    // (and the first save after it) never destroys the only copy.
+    if (text != null && text !== "null" && data.fresh) {
+      try { if (localStorage.getItem(RESCUE_KEY) == null) localStorage.setItem(RESCUE_KEY, text); } catch (e) {}
+    }
     this.data = data;
     this.user = { uid: "local", name: "Me" };
     if (raw) this.persist();
@@ -59,9 +80,14 @@ export class LocalStore {
   get profile() { return this.data.profile || null; }
   get suggested() { return this.data.suggested; }
   get example() { return !!this.data.example; }
+  /** Save to this phone. Returns false (and calls onSaveError) when the phone refuses, for example when storage is full. */
   persist() {
     const { suggested, fresh, ...rest } = this.data;
-    try { localStorage.setItem(LKEY, JSON.stringify(rest)); } catch (e) {}
+    try { localStorage.setItem(LKEY, JSON.stringify(rest)); return true; }
+    catch (e) {
+      try { this.onSaveError?.(e); } catch (err) {}
+      return false;
+    }
   }
   emit(pid) {
     const p = this.data.patients[pid];
@@ -119,9 +145,14 @@ export class LocalStore {
   }
   exportBackup() { return buildBackup(this.data.patients); }
   importBackup(backup) {
-    const into = this.data.patients.me && !(this.data.patients.me.meds || []).length ? "me" : null;
+    const into = this.data.patients.me ? "me" : null; // planImport fills it only when it has nothing in it
     const plan = planImport(this.data.patients, backup, { intoEmptyId: into });
     if (!plan.ok) return plan;
+    // Keep what was here right before the import, so a wrong file can be undone by hand.
+    try {
+      const { suggested, fresh, ...rest } = this.data;
+      localStorage.setItem(PRE_IMPORT_KEY, JSON.stringify({ savedAt: new Date().toISOString(), data: rest }));
+    } catch (e) {}
     this.data.patients = plan.patients;
     this.data.example = false;
     this.data.fresh = false;
@@ -182,7 +213,9 @@ export class LocalStore {
   }
   async adjustStock(pid, medId, delta, ev = {}) {
     const p = this.data.patients[pid], m = p?.meds.find(x => x.id === medId);
-    if (!m || typeof m.stock !== "number") return;
+    if (!m || typeof m.stock !== "number" || !Number.isFinite(m.stock)) return;
+    if (!Number.isFinite(Number(delta))) return; // never turn a count into NaN
+    delta = Number(delta);
     if (ev.opId && (p.appliedOps || []).includes(ev.opId)) return;
     m.stock = Math.round((m.stock + delta) * 1e6) / 1e6;
     (p.stockLog = p.stockLog || []).push({ id: ev.opId || uid(), medId, delta, after: m.stock, at: new Date().toISOString(), ...ev });

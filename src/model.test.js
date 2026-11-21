@@ -502,7 +502,7 @@ describe("medToIcs", () => {
 
   it("escapes text and is empty for as-needed or ended medicines", () => {
     const ics = medToIcs({ ...base, name: "A, B; C", notes: "With food\nno alcohol", schedule: { kind: "daily" } }, {}, NOW);
-    expect(lines(ics).find(x => x.startsWith("SUMMARY:"))).toContain("A\\, B\; C");
+    expect(lines(ics).find(x => x.startsWith("SUMMARY:"))).toContain("A\\, B\\; C"); // RFC 5545: "," and ";" are both escaped
     expect(lines(ics).find(x => x.startsWith("DESCRIPTION:"))).toContain("With food\\nno alcohol");
     expect(medToIcs({ ...base, times: [], schedule: { kind: "prn" } }, {}, NOW)).toBe("");
     expect(medToIcs({ ...base, end: "2026-11-01", schedule: { kind: "daily" } }, {}, NOW)).toBe("");

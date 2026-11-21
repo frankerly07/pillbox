@@ -90,6 +90,7 @@ async function replaceReminders(meds, doses) {
   } catch (e) {}
 }
 
+export const CARE_ID_MIN = 5000, CARE_ID_MAX = 8999;
 /** Caregiver app: a one-off alert for each of today's doses that isn't taken an hour after it was due. */
 export async function scheduleCaregiverChecks(patients, dueWindowMin = 60) {
   if (!isNative) return;
@@ -97,14 +98,16 @@ export async function scheduleCaregiverChecks(patients, dueWindowMin = 60) {
     await loadLN();
     const L = ln();
     const pending = await L.getPending();
-    const old = pending.notifications.filter(n => n.id >= 5000).map(n => ({ id: n.id }));
+    // Caregiver checks use ids 5000–8999 only. 9000+ are immediate alerts (alertNow), which this must not cancel.
+    const old = pending.notifications.filter(n => n.id >= CARE_ID_MIN && n.id <= CARE_ID_MAX).map(n => ({ id: n.id }));
     if (old.length) await L.cancel({ notifications: old });
     const now = Date.now(), notifications = [];
-    let id = 5000;
+    let id = CARE_ID_MIN;
     for (const p of patients) {
       for (const d of dosesOn(new Date(), p.meds, p.doses, { now, dueWindowMin })) {
         const fire = d.when + dueWindowMin * 60000;
         if (d.log || fire <= now) continue;
+        if (id > CARE_ID_MAX) break; // never run into the immediate-alert ids
         notifications.push({ id: id++, title: t("notif.mayMissTitle", { name: p.name }), body: t("notif.mayMissBody", { med: d.med.name, time: fmtTime(d.time) }), schedule: { at: new Date(fire), allowWhileIdle: true }, channelId: "care", extra: { pid: p.id, key: d.key } });
       }
     }
@@ -221,6 +224,30 @@ export async function shareIcs(med, doses = {}) {
   } catch (e) {
     const cancelled = /cancel/i.test(String(e && e.message || e));
     return { ok: false, method: "ics", ids: [], message: cancelled ? t("cal.notAdded") : t("cal.fileFail") };
+  }
+}
+
+// ---------------- Backup file ----------------
+/**
+ * Save the backup JSON somewhere the person can keep it. Android's WebView ignores web download links, so on the
+ * phone the file is written to the app cache and handed to the share sheet (Drive, Files, email…); in a browser it
+ * downloads. Never throws: { ok, method: "share" | "download", cancelled? }.
+ */
+export async function saveBackupFile(json, name = "pillbox-backup.json") {
+  try {
+    if (isNative) {
+      const { Filesystem, Directory, Encoding } = await import("@capacitor/filesystem");
+      const { Share } = await import("@capacitor/share");
+      const f = await Filesystem.writeFile({ path: name, data: json, directory: Directory.Cache, encoding: Encoding.UTF8 });
+      await Share.share({ title: name, files: [f.uri], dialogTitle: t("set.export") });
+      return { ok: true, method: "share" };
+    }
+    const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+    const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 8000);
+    return { ok: true, method: "download" };
+  } catch (e) {
+    return { ok: false, method: isNative ? "share" : "download", cancelled: /cancel/i.test(String(e && e.message || e)) };
   }
 }
 

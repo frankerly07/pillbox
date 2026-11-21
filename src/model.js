@@ -76,6 +76,7 @@ function scheduleOf(med) {
   if (s && SCHEDULES.includes(s.kind)) return s;
   return { kind: (med.times || []).length ? "daily" : "prn" }; // older medicines: times every day, none = as needed
 }
+const isTimeOfDay = v => typeof v === "string" && /^([01]?\d|2[0-3]):[0-5]\d$/.test(v);
 /**
  * Fill in type, dose and schedule for medicines saved before those existed: a pill, its old pills-per-dose,
  * counted in pills, every day at its times (no times = as needed). Keeps every other field. Idempotent.
@@ -89,7 +90,10 @@ export function normalizeMed(med) {
   if (!UNIT_NAMES[m.doseUnit] || m.type === "pill") m.doseUnit = t.doseUnits[0];
   if (!UNIT_NAMES[m.supplyUnit] || m.type === "pill") m.supplyUnit = t.supplyUnits[0];
   m.perContainer = Number(m.perContainer) > 0 ? Number(m.perContainer) : null;
-  m.times = Array.isArray(m.times) ? m.times : [];
+  // Only real "H:MM"/"HH:MM" times: a bad value from an old record or a backup file would break every screen.
+  m.times = Array.isArray(m.times) ? m.times.filter(isTimeOfDay) : [];
+  // A count that isn't a real number (NaN from a bad file) is treated as "not counted" so it can be set again.
+  if (typeof m.stock === "number" && !Number.isFinite(m.stock)) m.stock = null;
   m.schedule = { ...scheduleOf(med) };
   if (m.schedule.kind === "prn") m.times = [];
   return m;
@@ -485,7 +489,8 @@ export function adherenceProgress(meds, doses, now = Date.now()) {
 const BYDAY = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
 const icsLocal = d => d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + "T" + pad(d.getHours()) + pad(d.getMinutes()) + "00";
 const icsUtc = d => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-const icsText = s => String(s ?? "").replace(/\\/g, "\\\\").replace(/;/g, "\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+// RFC 5545 §3.3.11: backslash, semicolon and comma are escaped with a backslash; newlines become \n.
+const icsText = s => String(s ?? "").replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
 // Fold lines longer than 75 octets (RFC 5545 §3.1) without splitting a character.
 function icsFold(line) {
   const enc = new TextEncoder(), out = [];

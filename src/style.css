@@ -36,7 +36,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .btn-primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .btn-quiet{border-color:transparent;background:transparent;color:var(--accent-text);padding-inline:8px}
 .btn-danger{color:var(--bad);border-color:var(--bad)}
-.btn-sm{min-height:36px;padding:6px 12px;font-size:.9rem}
+.btn-sm{min-height:44px;padding:6px 12px;font-size:.9rem}
 
 /* next-dose panel */
 .next{background:var(--surface);border:1.5px solid var(--line);border-radius:18px;padding:18px}
@@ -57,7 +57,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .well.taken .pill::after{content:"";position:absolute;left:6px;top:2px;width:5px;height:10px;border:solid var(--ok-ink);border-width:0 2.5px 2.5px 0;transform:rotate(45deg)}
 .well.due{border-color:var(--warn);box-shadow:0 0 0 3px var(--warn-soft)} .well.due .pill{border-color:var(--warn)}
 .well.missed{border-style:dashed;border-color:var(--bad)} .well.missed .pill{border-color:var(--bad)}
-.well.skipped{opacity:.6}
+/* No opacity: it pulled the grey text under 4.5:1. The sunk fill still reads as "set aside". */
+.well.skipped{background:var(--sunk)}
 .chip{display:inline-block;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:999px;background:var(--sunk);color:var(--muted);width:max-content}
 .chip.taken{background:var(--ok-soft);color:var(--ok)} .chip.due{background:var(--warn-soft);color:var(--warn)} .chip.missed{background:var(--bad-soft);color:var(--bad)}
 .chip.ex{background:var(--warn-soft);color:var(--warn)}
@@ -94,7 +95,7 @@ input,select,textarea{font:inherit;color:var(--fg);background:var(--surface);bor
 /* tab bar */
 nav.tabs{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1.5px solid var(--line);display:flex;justify-content:center;padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px));z-index:5}
 nav.tabs .in{display:grid;grid-template-columns:repeat(4,1fr);width:100%;max-width:560px;gap:4px}
-nav.tabs a{color:var(--muted);text-decoration:none;font-weight:700;font-size:.85rem;text-align:center;padding:10px 4px;border-radius:12px}
+nav.tabs a{color:var(--muted);text-decoration:none;font-weight:700;font-size:.85rem;text-align:center;padding:10px 4px;border-radius:12px;min-height:44px;display:flex;align-items:center;justify-content:center}
 nav.tabs a[aria-current="page"]{color:var(--accent-text);background:var(--accent-soft)}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:999px;font-weight:700;z-index:30;max-width:calc(100% - 32px)}
 .log{font-family:var(--f-mono);font-size:.82rem;background:var(--sunk);border-radius:12px;padding:12px;max-height:200px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -103,11 +104,11 @@ nav.tabs a[aria-current="page"]{color:var(--accent-text);background:var(--accent
 .wrap{padding-top:calc(18px + env(safe-area-inset-top,0px))}
 .small{font-size:.82rem}
 .toast{display:flex;align-items:center;gap:8px;border-radius:18px;width:max-content}
-.toast .toast-undo{color:var(--bg);min-height:32px;text-decoration:underline}
+.toast .toast-undo{color:var(--bg);min-height:44px;text-decoration:underline}
 .due-row{display:flex;gap:8px;align-items:stretch}
 .due-row .btn-sm{align-self:center}
 .log-one{display:flex;flex-direction:column;gap:2px;align-items:flex-start;text-align:left;flex:1;border-radius:18px;padding:16px 18px;background:var(--accent);border:0;color:var(--accent-ink);min-height:92px}
-.log-one .eyebrow{color:inherit;opacity:.85}
+.log-one .eyebrow{color:inherit}
 .log-one .take-label{font-family:var(--f-display);font-size:1.35rem;font-weight:800;line-height:1.15}
 .log-one .take-meds{font-weight:400;opacity:.92}
 .role-choice{width:100%;text-align:left;border-radius:16px;min-height:56px;font-size:1.05rem}
@@ -116,7 +117,7 @@ nav.tabs a[aria-current="page"]{color:var(--accent-text);background:var(--accent
 .view-switch{margin-bottom:2px}
 /* the one big button */
 .take-all{display:flex;flex-direction:column;gap:4px;align-items:flex-start;text-align:left;width:100%;border-radius:22px;padding:22px 20px;background:var(--accent);border:0;color:var(--accent-ink);min-height:120px}
-.take-all .eyebrow{color:inherit;opacity:.85}
+.take-all .eyebrow{color:inherit}
 .take-all .take-label{font-family:var(--f-display);font-size:1.7rem;font-weight:800;line-height:1.1}
 .take-all .take-meds{font-weight:400;opacity:.92}
 /* calendar */
@@ -139,7 +140,7 @@ nav.tabs a[aria-current="page"]{color:var(--accent-text);background:var(--accent
 .pcard.missed{border-color:var(--bad)} .pcard.due{border-color:var(--warn)}
 .pname{font-family:var(--f-display);font-size:1.2rem;min-width:0;overflow-wrap:anywhere}
 .seg{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;background:var(--sunk);padding:4px;border-radius:999px}
-.seg button{border:0;background:transparent;min-height:40px;padding:6px}
+.seg button{border:0;background:transparent;min-height:44px;padding:6px}
 .seg button[aria-selected="true"]{background:var(--surface);color:var(--accent-text)}
 .code{font-family:var(--f-mono);font-size:2.4rem;letter-spacing:.12em;text-align:center;background:var(--sunk);border-radius:16px;padding:14px}
 .auth{padding-top:24px}
@@ -165,7 +166,7 @@ h3{font-size:1rem;font-weight:700;margin-top:4px}
 .opts{display:flex;flex-wrap:wrap;gap:6px}
 .opt{position:relative;font-weight:700;font-size:.9rem}
 .opt input{position:absolute;opacity:0;width:1px;height:1px;min-height:0}
-.opt > span{display:inline-flex;align-items:center;gap:4px;min-height:40px;padding:6px 12px;border:1.5px solid var(--line);border-radius:999px;background:var(--surface);cursor:pointer}
+.opt > span{display:inline-flex;align-items:center;gap:4px;min-height:44px;padding:6px 12px;border:1.5px solid var(--line);border-radius:999px;background:var(--surface);cursor:pointer}
 .opt input:checked + span{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-text)}
 .opt input:focus-visible + span{outline:3px solid var(--focus);outline-offset:2px}
 .amount{display:flex;gap:8px;align-items:center}
@@ -199,7 +200,7 @@ h3{font-size:1rem;font-weight:700;margin-top:4px}
 .ev-types{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .ev-type{min-height:64px;border-radius:16px;font-size:1.05rem;justify-content:flex-start;text-align:left}
 .ev-types .ev-type:last-child:nth-child(odd){grid-column:1 / -1}
-.tog{min-height:40px;padding:6px 12px;font-size:.9rem}
+.tog{min-height:44px;padding:6px 12px;font-size:.9rem}
 .tog[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-text)}
 .lbl{font-weight:700;font-size:.92rem}
 textarea{resize:vertical}
