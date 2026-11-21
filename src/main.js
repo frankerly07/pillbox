@@ -1,6 +1,7 @@
 import "./style.css";
 import * as M from "./model.js";
-import { makeStore, syncStatus } from "./store.js";
+import { makeStore, syncStatus, loadCycle, saveCycle } from "./store.js";
+import * as C from "./cycle.js";
 import { PERMISSIONS } from "./access.js";
 import { applyCatalogChoice } from "./drug-catalog.js";
 import { lookupPackageCode, searchDrugNames } from "./rxnav.js";
@@ -23,14 +24,18 @@ const S = {
   cal: { y: new Date().getFullYear(), m: new Date().getMonth(), sel: dayKey(new Date()) },
   editing: null, sheet: null, drug: null, alert: null, ble: "", invite: null, invitePreview: null, auth: { mode: "signin", error: "" },
   settings: R.loadSettings(), perm: "default", allBusy: false,
+  // Period log: this phone only, never in a patient record (see loadCycle in store.js).
+  cycle: loadCycle(), cycleForm: null, cycleCal: { y: new Date().getFullYear(), m: new Date().getMonth() },
 };
 function bodyFigure() { return S.settings.bodyFigure === "female" ? "female" : "male"; }
 function saveSettings() { R.saveSettings(S.settings); }
 const opts = () => ({ now: Date.now(), dueWindowMin: S.settings.dueWindowMin });
 const snap = (pid = S.pid) => S.snaps[pid] || { meds: [], doses: {}, events: {}, name: "" };
 // Background redraws (new data, 30 s tick) wait while a form is open, so typing and focus aren't lost.
-const busy = () => !!(S.editing || S.sheet);
+const busy = () => !!(S.editing || S.sheet || S.cycleForm);
 const isCare = () => S.activeView === "caregiver";
+// Cycle screens: patient view only, female figure, and "Track my cycle" on. The log is kept when this is false.
+const cycleOn = () => !isCare() && C.cycleEnabled(S.settings);
 const productName = () => (S.legacyCare ? "PillAlly Care" : "PillAlly");
 const PKEY = "pillbox.profile";
 function readProfile() { try { return JSON.parse(localStorage.getItem(PKEY) || "null"); } catch (e) { return null; } }
@@ -311,12 +316,12 @@ function actualText(d) {
 function calendarBlock(pid) {
   const p = snap(pid), { y, m, sel } = S.cal, first = new Date(y, m, 1), days = new Date(y, m + 1, 0).getDate();
   const title = capFirst(fmtDateL(first, { month: "long", year: "numeric" }));
-  const todayK = dayKey(new Date());
+  const todayK = dayKey(new Date()), pdays = cycleDays();
   let cells = "";
   for (let i = 0; i < first.getDay(); i++) cells += `<span></span>`;
   for (let d = 1; d <= days; d++) {
-    const date = new Date(y, m, d), k = dayKey(date), s = M.daySummary(date, p.meds, p.doses, opts()), ne = M.eventsOn(date, p.events).length;
-    cells += `<button class="cal-day ${s.state}${k === sel ? " sel" : ""}${k === todayK ? " today" : ""}" data-act="cal-sel" data-day="${k}" aria-label="${esc(fmtDateL(date, { weekday: "long", month: "long", day: "numeric", year: "numeric" }) + ": " + t("cal.xOfYTaken", { taken: s.taken, total: s.total }) + (ne ? ", " + tn("cal.events", ne) : ""))}"><span>${d}</span>${s.total && date <= new Date() ? `<i>${s.taken}/${s.total}</i>` : ""}${ne ? `<b class="ev-dot" aria-hidden="true"></b>` : ""}</button>`;
+    const date = new Date(y, m, d), k = dayKey(date), s = M.daySummary(date, p.meds, p.doses, opts()), ne = M.eventsOn(date, p.events).length, pd = !!pdays?.has(k);
+    cells += `<button class="cal-day ${s.state}${k === sel ? " sel" : ""}${k === todayK ? " today" : ""}" data-act="cal-sel" data-day="${k}" aria-label="${esc(fmtDateL(date, { weekday: "long", month: "long", day: "numeric", year: "numeric" }) + ": " + t("cal.xOfYTaken", { taken: s.taken, total: s.total }) + (ne ? ", " + tn("cal.events", ne) : "") + (pd ? ", " + t("cycle.periodDay") : ""))}"><span>${d}</span>${s.total && date <= new Date() ? `<i>${s.taken}/${s.total}</i>` : ""}${ne ? `<b class="ev-dot" aria-hidden="true"></b>` : ""}${pd ? `<b class="pd-mark" aria-hidden="true"></b>` : ""}</button>`;
   }
   const selDate = M.parseDay(sel), sum = M.daySummary(selDate, p.meds, p.doses, opts());
   const extras = Object.entries(p.doses).filter(([, v]) => v.extra && v.day === sel), dayEvents = M.eventsOn(selDate, p.events);
@@ -324,9 +329,10 @@ function calendarBlock(pid) {
   return `<section class="stack">
     <div class="row spread"><button class="btn-sm" data-act="cal-prev" aria-label="${esc(t("cal.prev"))}">‹</button><h2>${esc(title)}</h2><button class="btn-sm" data-act="cal-next" aria-label="${esc(t("cal.next"))}">›</button></div>
     <div class="cal"><div class="cal-head">${[0, 1, 2, 3, 4, 5, 6].map(i => `<span>${esc(weekdayLetter(i))}</span>`).join("")}</div><div class="cal-grid">${cells}</div></div>
-    <div class="legend"><span><i class="lg all"></i>${esc(t("cal.allTaken"))}</span><span><i class="lg some"></i>${esc(t("cal.someMissed"))}</span><span><i class="lg none"></i>${esc(t("cal.noneTaken"))}</span></div>
+    <div class="legend"><span><i class="lg all"></i>${esc(t("cal.allTaken"))}</span><span><i class="lg some"></i>${esc(t("cal.someMissed"))}</span><span><i class="lg none"></i>${esc(t("cal.noneTaken"))}</span>${pdays?.size ? `<span><i class="lg period"></i>${esc(t("cycle.periodDay"))}</span>` : ""}</div>
     <div class="next"><div class="eyebrow">${esc(t("cal.last30"))}</div><div class="big mono">${ad.pct ?? "–"}${ad.pct != null ? "%" : ""}</div><div class="muted">${esc(t("cal.scheduledTaken", { taken: ad.taken, total: ad.total }))}</div></div>
     <h2 id="day-detail">${esc(longDate(selDate))}</h2>
+    ${pdays?.has(sel) ? `<div><span class="chip period">${esc(t("cycle.periodDay"))}</span></div>` : ""}
     ${sum.list.length ? `<div class="muted">${esc(t("cal.scheduledTaken", { taken: sum.taken, total: sum.total }))}${sum.list.some(d => d.status === "missed") ? ` · <span class="stock-low">${esc(tn("cal.missed", sum.list.filter(d => d.status === "missed").length))}</span>` : ""}</div>` : ""}
     ${sum.list.length || extras.length ? `<div class="list day-list">` + sum.list.map(d => `<div class="item dd ${d.status}"><div class="stack-tight">
         <div><span aria-hidden="true">${M.typeIcon(d.med)}</span> <strong>${esc(d.med.name)}</strong> ${esc(d.med.strength || "")} <span class="chip ${d.status}">${esc(statusLabel(d.status))}</span></div>
@@ -367,12 +373,14 @@ function historyButton(m, doses) {
 const fmtDay = key => { const d = M.parseDay(key), today = dayKey(new Date()), y = new Date(); y.setDate(y.getDate() - 1);
   return key === today ? t("day.today") : key === dayKey(y) ? t("day.yesterday") : capFirst(fmtDateL(d, { weekday: "short", month: "short", day: "numeric", ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) })); };
 function historyView(pid, m) {
-  const p = snap(pid), h = doseHistory(m, p.doses), w = historyNoun(m);
+  const p = snap(pid), h = doseHistory(m, p.doses), w = historyNoun(m), pdays = cycleDays();
+  // With cycle tracking on, logged period days are marked next to doses (useful with bleeding disorders).
+  const pdChip = day => (pdays?.has(day) ? ` <span class="chip period">${esc(t("cycle.chip"))}</span>` : "");
   return `<div class="row spread"><button class="btn-sm" data-act="history-close">‹ ${esc(m.name)}</button><button class="btn-sm" data-act="edit" data-med="${m.id}">${esc(t("btn.edit"))}</button></div>
    <section class="sheet stack"><div><div class="eyebrow">${esc(w.title)}</div><h2><span aria-hidden="true">${M.typeIcon(m)}</span> ${esc(m.name)} ${esc(m.strength)}</h2></div>
      <div class="history-total"><span class="big mono">${h.total}</span> <span class="muted">${esc(t(w.shot ? (h.total === 1 ? "hist.shotTaken_one" : "hist.shotTaken_other") : (h.total === 1 ? "hist.doseTaken_one" : "hist.doseTaken_other")))}</span></div>
    </section>
-   ${h.total ? h.days.map(g => `<section class="stack-tight history-day"><h3>${esc(fmtDay(g.day))}</h3><div class="list">` + g.entries.map(e => `<div class="item"><span class="mono">${fmtClock(e.at)}</span><span class="history-amt">${esc(e.amount)}${e.extra ? ` <span class="chip">${esc(t("chip.additional"))}</span>` : ""}${e.edited ? ` <span class="chip">${esc(t("chip.corrected"))}</span>` : ""}</span></div>`).join("") + `</div></section>`).join("")
+   ${h.total ? h.days.map(g => `<section class="stack-tight history-day"><h3>${esc(fmtDay(g.day))}${pdChip(g.day)}</h3><div class="list">` + g.entries.map(e => `<div class="item"><span class="mono">${fmtClock(e.at)}</span><span class="history-amt">${esc(e.amount)}${e.extra ? ` <span class="chip">${esc(t("chip.additional"))}</span>` : ""}${e.edited ? ` <span class="chip">${esc(t("chip.corrected"))}</span>` : ""}</span></div>`).join("") + `</div></section>`).join("")
      : `<div class="sheet empty-state"><strong>${esc(t(w.shot ? "hist.noShots" : "hist.noDoses"))}</strong><div class="muted">${esc(t(w.shot ? "hist.emptyShots" : "hist.emptyDoses", { name: m.name }))}</div></div>`}`;
 }
 function medsBlock(pid) {
@@ -534,7 +542,10 @@ function patientView() {
   switch (S.view) {
     case "calendar": return header(t("nav.calendar"), t("cal.sub")) + `<div class="stack">${viewSwitch()}${calendarBlock(pid)}</div>`;
     case "meds": return header(t("nav.meds"), t("meds.onList", { n: p.meds.length })) + `<div class="stack">${viewSwitch()}${exampleBanner()}${medsBlock(pid)}</div>`;
+    case "cycle": if (cycleOn()) return header(t("cycle.title"), t("cycle.sub")) + `<div class="stack">${viewSwitch()}${cycleView()}</div>`;
+      return header(t("nav.today"), longDate(now)) + `<div class="stack">${viewSwitch()}${todayBlock(pid)}</div>`;
     case "more": return header(t("nav.more"), t("more.sub")) + `<div class="stack">${viewSwitch()}${legacyBanner()}
+      ${cycleCard()}
       ${careTeamBlock(pid, p)}
       <section class="sheet stack"><h2>${esc(t("box.title"))}</h2>
         <div class="row spread"><div><strong>${esc(t("box.ble"))}</strong><div class="muted">${esc(S.ble || t("ble.notConnected"))}</div></div><button class="btn-sm btn-primary" data-act="ble">${esc(t("btn.connect"))}</button></div>
@@ -542,7 +553,7 @@ function patientView() {
         ${p.meds.filter(m => m.slot).length ? `<div class="pack">` + p.meds.filter(m => m.slot).sort((a, b) => a.slot - b.slot).map(m => `<button class="well" data-act="sim" data-slot="${m.slot}"><span class="time">${esc(t("box.slot", { n: m.slot }))}</span><span class="name">${esc(m.name)}</span><span class="dose">${esc(t("box.openLid"))}</span></button>`).join("") + `</div>` : `<p class="muted">${esc(t("box.assignFirst"))}</p>`}
       </section>
       <section class="sheet stack"><h2>${esc(t("nav.settings"))}</h2>${languageCard()}${settingsExtras()}${remindersCard()}${calendarSettingsCard()}${accountCard()}</section></div>`;
-    default: return header(t("nav.today"), longDate(now)) + `<div class="stack">${viewSwitch()}${legacyBanner()}${alertBanner()}${exampleBanner()}${todayBlock(pid)}</div>`;
+    default: return header(t("nav.today"), longDate(now)) + `<div class="stack">${viewSwitch()}${legacyBanner()}${alertBanner()}${exampleBanner()}${todayBlock(pid)}${cycleCard()}</div>`;
   }
 }
 
@@ -600,8 +611,100 @@ function settingsExtras() {
     <strong>${esc(t("set.figure"))}</strong>
     <div class="muted small">${esc(t("set.figureHelp"))}</div>
     <div class="row"><button type="button" class="btn-sm ${bodyFigure() === "male" ? "btn-primary" : ""}" data-act="body-figure" data-v="male" aria-pressed="${bodyFigure() === "male"}">${esc(t("set.male"))}</button><button type="button" class="btn-sm ${bodyFigure() === "female" ? "btn-primary" : ""}" data-act="body-figure" data-v="female" aria-pressed="${bodyFigure() === "female"}">${esc(t("set.female"))}</button></div>
+    ${cycleSetting()}
     <div class="row"><button class="btn-sm" data-act="export-backup">${esc(t("set.export"))}</button><button class="btn-sm" data-act="import-backup">${esc(t("set.import"))}</button></div>
     <div class="muted small">${esc(t("set.backupHelp"))}</div></div>`;
+}
+
+// ---------------- cycle (optional, this phone only) ----------------
+// Shown only with the female figure and "Track my cycle" on (cycleOn). Estimates only; no fertility claims.
+const todayKey = () => dayKey(new Date());
+const cycleDate = key => { const d = M.parseDay(key); return capFirst(fmtDateL(d, { month: "short", day: "numeric", ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) })); };
+const cycleDays = () => (cycleOn() ? C.bleedingDays(S.cycle.periods, todayKey()) : null);
+function cycleSetting() {
+  if (isCare() || bodyFigure() !== "female") return "";
+  const on = !!S.settings.cycleTracking;
+  return `<div class="row spread" style="flex-wrap:nowrap"><div><strong id="cycle-l">${esc(t("set.cycle"))}</strong><div class="muted small">${esc(t(on ? "set.cycleOn" : "set.cycleOff"))}</div></div>
+    <button type="button" class="btn-sm ${on ? "" : "btn-primary"}" role="switch" aria-checked="${on}" aria-labelledby="cycle-l" data-act="cycle-toggle">${esc(t(on ? "btn.turnOff" : "btn.turnOn"))}</button></div>`;
+}
+function cycleWhen(st) {
+  if (st.daysUntil == null) return "";
+  return st.daysUntil > 0 ? tn("cycle.inDays", st.daysUntil) : st.daysUntil === 0 ? t("cycle.aroundToday") : tn("cycle.daysAgo", -st.daysUntil);
+}
+function cycleNext(st) {
+  return `<div><div class="eyebrow">${esc(t("cycle.nextEst"))}</div>${st.nextStart
+    ? `<div class="big">${esc(cycleDate(st.nextStart))}</div><div class="muted">${esc(cycleWhen(st))}</div>`
+    : `<div class="muted">${esc(t("cycle.needTwo"))}</div>`}</div>`;
+}
+// Today and More: a small card that opens the Cycle screen.
+function cycleCard() {
+  if (!cycleOn()) return "";
+  const st = C.cycleStats(S.cycle.periods, todayKey());
+  return `<section class="sheet stack cycle-card"><div class="row spread" style="flex-wrap:nowrap">${st.count ? cycleNext(st) : `<div><h2>${esc(t("cycle.title"))}</h2><div class="muted">${esc(t("cycle.moreHelp"))}</div></div>`}
+    <button class="btn-sm" data-act="go-cycle">${esc(t("cycle.open"))}</button></div>${st.nextStart ? `<div class="muted small">${esc(t("cycle.disclaimer"))}</div>` : ""}</section>`;
+}
+function cycleCalendar(days) {
+  const { y, m } = S.cycleCal, first = new Date(y, m, 1), n = new Date(y, m + 1, 0).getDate(), todayK = todayKey();
+  let cells = "";
+  for (let i = 0; i < first.getDay(); i++) cells += `<span></span>`;
+  for (let d = 1; d <= n; d++) {
+    const k = dayKey(new Date(y, m, d));
+    cells += `<span class="cal-day${days.has(k) ? " period" : ""}${k === todayK ? " today" : ""}"><span>${d}</span>${days.has(k) ? `<b class="pd-mark"></b>` : ""}</span>`;
+  }
+  // The list below says the same thing in words, so screen readers skip the grid.
+  return `<div class="row spread"><button class="btn-sm" data-act="cycle-prev" aria-label="${esc(t("cal.prev"))}">‹</button><h2>${esc(capFirst(fmtDateL(first, { month: "long", year: "numeric" })))}</h2><button class="btn-sm" data-act="cycle-next" aria-label="${esc(t("cal.next"))}">›</button></div>
+    <div class="cal" aria-hidden="true"><div class="cal-head">${[0, 1, 2, 3, 4, 5, 6].map(i => `<span>${esc(weekdayLetter(i))}</span>`).join("")}</div><div class="cal-grid">${cells}</div></div>
+    <div class="legend" aria-hidden="true"><span><i class="lg period"></i>${esc(t("cycle.periodDay"))}</span></div>`;
+}
+function periodItem(p) {
+  const today = todayKey(), ongoing = C.isOngoing(p, today);
+  const range = cycleDate(p.start) + (p.end && p.end !== p.start ? " – " + cycleDate(p.end) : "");
+  const detail = [t("cycle.flowLine", { flow: t("flow." + p.flow).toLocaleLowerCase(getLang()) }), ...p.symptoms.map(s => t("sym." + s))].join(" · ");
+  return `<button class="item item-btn" data-act="cycle-open" data-id="${esc(p.id)}"><div class="stack-tight" style="min-width:0;flex:1">
+    <div><strong>${esc(range)}</strong>${p.end ? ` <span class="muted">· ${esc(tn("cycle.days", C.daysBetween(p.start, p.end) + 1))}</span>` : ongoing ? ` <span class="chip period">${esc(t("cycle.ongoing"))}</span>` : ""}</div>
+    <div class="muted small">${esc(detail)}</div>${p.note ? `<div class="ev-notes">${esc(p.note)}</div>` : ""}</div><span class="chev" aria-hidden="true">›</span></button>`;
+}
+function readCycleForm() {
+  const f = document.getElementById("cycleform"); if (!f || !S.cycleForm) return;
+  const fd = new FormData(f);
+  for (const k of ["start", "end", "note"]) if (fd.has(k)) S.cycleForm[k] = fd.get(k);
+}
+document.addEventListener("input", e => { if (e.target.closest("#cycleform")) readCycleForm(); });
+function cycleError(err) {
+  if (err.code === "tooLong") return t("cycle.errLong", { n: err.n });
+  if (err.code === "overlap") return t("cycle.errOverlap", { date: cycleDate(err.start) });
+  return t({ start: "cycle.errStart", future: "cycle.errFuture", endFuture: "cycle.errFuture", endBefore: "cycle.errEnd" }[err.code] || "cycle.errStart");
+}
+function cycleForm() {
+  const f = S.cycleForm, today = todayKey();
+  const toggles = (act, list, on, label) => list.map(k => `<button type="button" class="tog" data-act="${act}" data-v="${k}" aria-pressed="${on(k)}">${esc(t(label + k))}</button>`).join("");
+  return `<form class="sheet stack" id="cycleform"><h2>${esc(t(f.id ? "cycle.edit" : "cycle.log"))}</h2>
+    <div class="grid2"><div class="field"><label for="cy-start">${esc(t("cycle.start"))}</label><input id="cy-start" name="start" type="date" required max="${today}" value="${esc(f.start)}"></div>
+    <div class="field"><label for="cy-end">${esc(t("cycle.end"))}</label><input id="cy-end" name="end" type="date" max="${today}" min="${esc(f.start)}" value="${esc(f.end)}" aria-describedby="cy-end-h"></div></div>
+    <div class="muted small" id="cy-end-h">${esc(t("cycle.endHelp"))}</div>
+    <div class="field"><div class="lbl" id="cy-flow-l">${esc(t("cycle.flow"))}</div><div class="opts" role="group" aria-labelledby="cy-flow-l">${toggles("cycle-flow", C.FLOWS, k => f.flow === k, "flow.")}</div></div>
+    <div class="field"><div class="lbl" id="cy-sym-l">${esc(t("cycle.symptoms"))}</div><div class="opts" role="group" aria-labelledby="cy-sym-l">${toggles("cycle-sym", C.SYMPTOMS, k => f.symptoms.includes(k), "sym.")}</div></div>
+    <div class="field"><label for="cy-note">${esc(t("cycle.note"))}</label><textarea id="cy-note" name="note" rows="2" maxlength="500" placeholder="${esc(t("cycle.notePh"))}">${esc(f.note)}</textarea></div>
+    ${f.error ? `<div class="banner dup" role="alert">${esc(f.error)}</div>` : ""}
+    <div class="row spread"><div class="row"><button class="btn-primary" type="submit">${esc(t("btn.save"))}</button><button type="button" data-act="cycle-cancel">${esc(t("btn.cancel"))}</button></div>
+      ${f.id ? `<button type="button" class="btn-danger btn-sm" data-act="cycle-delete">${esc(t(f.confirmDelete ? "btn.tapAgainDelete" : "btn.delete"))}</button>` : ""}</div></form>`;
+}
+function cycleView() {
+  const back = `<div class="row"><button class="btn-sm" data-act="go-more">‹ ${esc(t("nav.more"))}</button></div>`;
+  if (S.cycleForm) return `${back}${cycleForm()}`;
+  const st = C.cycleStats(S.cycle.periods, todayKey()), list = C.newestFirst(S.cycle.periods);
+  const avg = n => (n ? esc(tn("cycle.days", n)) : "–");
+  return `${back}
+    <section class="sheet stack">${cycleNext(st)}
+      <div class="cycle-grid"><div><div class="eyebrow">${esc(t("cycle.avgCycle"))}</div><div class="big mono">${avg(st.avgCycle)}</div></div>
+        <div><div class="eyebrow">${esc(t("cycle.avgPeriod"))}</div><div class="big mono">${avg(st.avgPeriod)}</div></div></div>
+      ${st.outliers ? `<div class="muted small">${esc(tn("cycle.outliers", st.outliers))}</div>` : ""}
+      <p class="muted small">${esc(t("cycle.disclaimer"))}</p>
+      <button class="btn-primary" data-act="cycle-new">${esc(t("cycle.log"))}</button></section>
+    <section class="stack">${cycleCalendar(C.bleedingDays(S.cycle.periods, todayKey()))}</section>
+    <section class="stack"><h2>${esc(t("cycle.history"))}</h2>
+      ${list.length ? `<div class="list">${list.map(periodItem).join("")}</div>` : `<p class="muted">${esc(t("cycle.none"))}</p>`}</section>
+    <p class="muted small">${esc(t("cycle.private"))}</p>`;
 }
 
 // ---------------- caregiver app ----------------
@@ -695,7 +798,7 @@ function render() {
   $nav.hidden = false;
   $nav.setAttribute("aria-label", t("nav.aria"));
   const items = NAV[S.role];
-  $nav.innerHTML = `<div class="in" style="grid-template-columns:repeat(${items.length},1fr)">` + items.map(([k, l]) => `<a href="#${k}" ${S.view === k || (k === "patients" && S.view === "today") ? 'aria-current="page"' : ""}>${esc(t(l))}</a>`).join("") + `</div>`;
+  $nav.innerHTML = `<div class="in" style="grid-template-columns:repeat(${items.length},1fr)">` + items.map(([k, l]) => `<a href="#${k}" ${S.view === k || (k === "patients" && S.view === "today") || (k === "more" && S.view === "cycle") ? 'aria-current="page"' : ""}>${esc(t(l))}</a>`).join("") + `</div>`;
   const scroll = document.querySelector(".overlay .panel")?.scrollTop;
   $app.innerHTML = (isCare() ? caregiverView() : patientView()) + sheetView();
   const panel = scroll && document.querySelector(".overlay .panel"); if (panel) panel.scrollTop = scroll;
@@ -767,8 +870,9 @@ function sheetView() {
     <p class="dose-times"><strong>${esc(M.fmtDoseTimes(d))}</strong>${who}</p>${actions}`);
 }
 function route() {
-  const h = location.hash.slice(1), valid = NAV[S.role].map(x => x[0]);
+  const h = location.hash.slice(1), valid = NAV[S.role].map(x => x[0]).concat(cycleOn() ? ["cycle"] : []);
   S.view = valid.includes(h) ? h : valid[0];
+  S.cycleForm = null;
   if (!isCare()) S.pid = S.patients.find(p => p.id === "me")?.id || S.patients.find(p => p.owner)?.id || S.pid;
   if (isCare() && (S.view !== "patients" || S.pid === "me")) S.pid = null;
   S.editing = null; S.sheet = null; S.drug = null; N.stopBrowserScan(); S.joinError = ""; S.medDetail = null; S.medHistory = null; S.stockForm = null;
@@ -881,7 +985,28 @@ document.addEventListener("click", async e => {
       case "ev-type": readEventForm(); S.sheet.ev.type = el.dataset.type; break;
       case "ev-sev": readEventForm(); S.sheet.ev.severity = S.sheet.ev.severity === Number(el.dataset.v) ? null : Number(el.dataset.v); break;
       case "ev-cause": readEventForm(); S.sheet.ev.cause = S.sheet.ev.cause === el.dataset.v ? null : el.dataset.v; break;
-      case "body-figure": S.settings.bodyFigure = el.dataset.v === "female" ? "female" : "male"; saveSettings(); break;
+      case "body-figure": S.settings.bodyFigure = el.dataset.v === "female" ? "female" : "male"; saveSettings(); if (S.view === "cycle" && !cycleOn()) { location.hash = "more"; return; } break;
+      // Turning cycle tracking off (or picking the male figure) only hides it; the period log stays on this phone.
+      case "cycle-toggle": S.settings.cycleTracking = !S.settings.cycleTracking; saveSettings(); refocus = '[data-act="cycle-toggle"]'; break;
+      case "go-cycle": location.hash = "cycle"; return;
+      case "go-more": location.hash = "more"; return;
+      case "cycle-new": S.cycleForm = { start: todayKey(), end: "", flow: "medium", symptoms: [], note: "" }; window.scrollTo(0, 0); refocus = "#cy-start"; break;
+      case "cycle-open": { const p = S.cycle.periods.find(x => x.id === el.dataset.id); if (p) { S.cycleForm = { ...p, end: p.end || "", symptoms: [...p.symptoms] }; window.scrollTo(0, 0); refocus = "#cy-start"; } break; }
+      case "cycle-flow": if (S.cycleForm) { readCycleForm(); S.cycleForm.flow = C.FLOWS.includes(el.dataset.v) ? el.dataset.v : "medium"; refocus = `[data-act="cycle-flow"][data-v="${el.dataset.v}"]`; } break;
+      case "cycle-sym": if (S.cycleForm) {
+        readCycleForm(); const v = el.dataset.v, list = S.cycleForm.symptoms;
+        S.cycleForm.symptoms = list.includes(v) ? list.filter(x => x !== v) : C.SYMPTOMS.filter(x => x === v || list.includes(x));
+        refocus = `[data-act="cycle-sym"][data-v="${v}"]`;
+      } break;
+      case "cycle-cancel": S.cycleForm = null; break;
+      case "cycle-delete": {
+        if (!S.cycleForm?.id) break;
+        readCycleForm(); if (!S.cycleForm.confirmDelete) { S.cycleForm.confirmDelete = true; refocus = '[data-act="cycle-delete"]'; break; }
+        const id = S.cycleForm.id;
+        S.cycle = saveCycle({ ...S.cycle, periods: S.cycle.periods.filter(p => p.id !== id) }); S.cycleForm = null; toast(t("cycle.deleted")); break;
+      }
+      case "cycle-prev": S.cycleCal.m--; if (S.cycleCal.m < 0) { S.cycleCal.m = 11; S.cycleCal.y--; } break;
+      case "cycle-next": S.cycleCal.m++; if (S.cycleCal.m > 11) { S.cycleCal.m = 0; S.cycleCal.y++; } break;
       // Saved on this phone only; redraw everything (tabs, title, alarms) in the new language.
       case "lang": saveLangPref(el.dataset.v); initLang(); document.title = productName(); if (!isCare()) N.scheduleReminders(snap().meds, snap().doses).catch(() => {}); break;
       case "ev-area": {
@@ -1099,6 +1224,16 @@ document.addEventListener("submit", async e => {
         ...(was ? { editedBy: S.role, editedByName: name } : { by: S.role, byName: name, createdAt: Date.now() }) };
       await S.store.saveEvent(sh.pid, rec);
       S.sheet = null; toast(was ? t("toast.eventSaved") : t("toast.eventLogged", { type: M.eventTypeLabel(rec.type) }));
+    } else if (f.id === "cycleform") {
+      readCycleForm(); const form = S.cycleForm; if (!form) return;
+      const draft = { ...form, end: form.end || null };
+      const err = C.checkPeriod(draft, S.cycle.periods, todayKey());
+      if (err) { form.error = cycleError(err); render(); return; }
+      const now = Date.now(), was = form.id ? S.cycle.periods.find(p => p.id === form.id) : null;
+      const rec = C.normalizePeriod({ ...draft, id: form.id || M.uid(), createdAt: was?.createdAt || now, updatedAt: now });
+      S.cycle = saveCycle({ ...S.cycle, periods: [...S.cycle.periods.filter(p => p.id !== rec.id), rec] });
+      const d = M.parseDay(rec.start); S.cycleCal = { y: d.getFullYear(), m: d.getMonth() };
+      S.cycleForm = null; toast(t("cycle.saved"));
     } else if (f.id === "editform") {
       const sh = S.sheet, d = findDose(sh.pid, sh.key);
       if (!d?.log) { S.sheet = null; render(); return; }

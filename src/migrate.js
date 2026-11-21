@@ -2,6 +2,7 @@
 // this module never claims it can see the other app. It only keeps data already in this one,
 // and builds a backup file a person can move themselves.
 import { normalizeMed, normalizeEvent } from "./model.js";
+import { normalizePeriod, sortPeriods } from "./cycle.js";
 import { t, tn } from "./i18n.js";
 
 const DROP = ["access", "caregivers", "caregiverUids", "caregiverNames", "linkCode", "linkCodeExpires", "joinCode", "apiKey", "password", "token", "email", "secret"];
@@ -168,4 +169,24 @@ export function planImport(existingPatients, backup, { intoEmptyId = null, idSta
     imported.push(dest);
   }
   return { ok: true, patients, imported, message: tn("backup.added", imported.length) };
+}
+
+/**
+ * Period log saved on this phone (its own storage key, see store.js). Never part of a patient record,
+ * so it is not in backups, caregiver access or cloud sync.
+ * Accepts a bare array (no version) or { version, periods }. Bad entries are dropped; repeated ids get new ones.
+ */
+export const CYCLE_VERSION = 1;
+export function migrateCycleData(raw, now = Date.now()) {
+  const list = Array.isArray(raw) ? raw : raw && typeof raw === "object" && Array.isArray(raw.periods) ? raw.periods : [];
+  const seen = new Set(), periods = [];
+  for (const item of list) {
+    const p = normalizePeriod(item, now);
+    if (!p) continue;
+    let id = p.id, n = 2;
+    while (seen.has(id)) id = p.id + "-" + n++;
+    seen.add(id);
+    periods.push({ ...p, id });
+  }
+  return { version: CYCLE_VERSION, periods: sortPeriods(periods) };
 }

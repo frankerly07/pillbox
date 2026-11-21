@@ -22,7 +22,7 @@ describe("settings", () => {
   });
   it("keeps older saved settings and only turns on for a saved true", () => {
     const old = loadSettings(memStore({ [SETTINGS_KEY]: JSON.stringify({ bodyFigure: "female", dueWindowMin: 30 }) }));
-    expect(old).toEqual({ dueWindowMin: 30, bodyFigure: "female", calendarForNewMeds: false });
+    expect(old).toEqual({ dueWindowMin: 30, bodyFigure: "female", calendarForNewMeds: false, cycleTracking: false });
     expect(loadSettings(memStore({ [SETTINGS_KEY]: JSON.stringify({ calendarForNewMeds: "yes" }) })).calendarForNewMeds).toBe(false);
     const st = memStore();
     saveSettings({ ...loadSettings(st), calendarForNewMeds: true }, st);

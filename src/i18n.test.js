@@ -4,6 +4,7 @@ import {
   TABLES, LANG_KEY, t, tn, detectLang, resolveLang, readLangPref, saveLangPref, initLang, setLang, getLang, locale, fmtHM,
 } from "./i18n.js";
 import * as M from "./model.js";
+import * as C from "./cycle.js";
 import { historyNoun, historyCount } from "./dose-log.js";
 import { bodyMapHtml, hotspotsFor, labelBox, labelLines, FIGURE } from "./body-map.js";
 
@@ -36,7 +37,7 @@ describe("string tables", () => {
   });
 
   it("has a string for every key the app code asks for", () => {
-    const files = ["main.js", "model.js", "dose-log.js", "body-map.js", "native.js", "migrate.js", "store.js", "reminders.js"];
+    const files = ["main.js", "model.js", "dose-log.js", "body-map.js", "native.js", "migrate.js", "store.js", "reminders.js", "cycle.js"];
     const missing = [];
     for (const f of files) {
       const src = readFileSync(new URL("./" + f, import.meta.url), "utf8");
@@ -46,7 +47,7 @@ describe("string tables", () => {
         if (!key.endsWith(".")) for (const k of need) if (!(k in en)) missing.push(f + ": " + k);
       }
       // t(cond ? "a.b" : "c.d") and lists of keys such as NAV
-      for (const [, key] of src.matchAll(/"((?:nav|today|ev|cal|meds|supply|form|sheet|perm|rec|role|onb|auth|drug|btn|err|hist|dose|care|join|toast)\.[A-Za-z0-9_-]+)"/g)) {
+      for (const [, key] of src.matchAll(/"((?:nav|today|ev|cal|meds|supply|form|sheet|perm|rec|role|onb|auth|drug|btn|err|hist|dose|care|join|toast|cycle)\.[A-Za-z0-9_-]+)"/g)) {
         if (!(key in en) && !(key + "_one" in en)) missing.push(f + ": " + key);
       }
     }
@@ -66,6 +67,8 @@ describe("string tables", () => {
       ...[0, 1, 2, 3, 4, 5, 6].flatMap(i => ["wd." + i, "wdl." + i]),
       ...["daily", "weekdays", "everyNDays", "everyNWeeks", "monthly", "prn"].map(k => "freq." + k),
       "lang.auto", "lang.en", "lang.es",
+      ...C.FLOWS.map(k => "flow." + k),
+      ...C.SYMPTOMS.map(k => "sym." + k),
     ];
     expect(need.filter(k => !(k in en) || !(k in es))).toEqual([]);
   });

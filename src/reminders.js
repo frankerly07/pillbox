@@ -4,8 +4,8 @@ import { isPrn } from "./model.js";
 import { t, tn } from "./i18n.js";
 
 export const SETTINGS_KEY = "pillbox.settings";
-/** "Add new medicines to my calendar" starts off. */
-export const DEFAULT_SETTINGS = Object.freeze({ dueWindowMin: 60, bodyFigure: "male", calendarForNewMeds: false });
+/** "Add new medicines to my calendar" and "Track my cycle" start off. */
+export const DEFAULT_SETTINGS = Object.freeze({ dueWindowMin: 60, bodyFigure: "male", calendarForNewMeds: false, cycleTracking: false });
 
 /** Saved settings merged over the defaults. Bad or missing storage gives the defaults. */
 export function loadSettings(storage = globalThis.localStorage) {
@@ -13,6 +13,7 @@ export function loadSettings(storage = globalThis.localStorage) {
   try { saved = JSON.parse(storage?.getItem(SETTINGS_KEY) || "{}") || {}; } catch (e) { saved = {}; }
   const s = { ...DEFAULT_SETTINGS, ...(typeof saved === "object" && !Array.isArray(saved) ? saved : {}) };
   s.calendarForNewMeds = s.calendarForNewMeds === true;
+  s.cycleTracking = s.cycleTracking === true;
   return s;
 }
 export function saveSettings(settings, storage = globalThis.localStorage) {

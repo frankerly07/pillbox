@@ -1,5 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { buildBackup, migrateLocalData, planImport } from "./migrate.js";
+import { buildBackup, migrateLocalData, migrateCycleData, CYCLE_VERSION, planImport } from "./migrate.js";
+
+describe("period log", () => {
+  it("starts empty for missing or bad data", () => {
+    for (const raw of [null, undefined, "x", 3, {}, { periods: "no" }]) expect(migrateCycleData(raw)).toEqual({ version: CYCLE_VERSION, periods: [] });
+  });
+
+  it("reads a bare list or a versioned file, drops bad entries, sorts, and fixes repeated ids", () => {
+    const bare = migrateCycleData([{ id: "b", start: "2026-10-01" }, { start: "nope" }, { id: "a", start: "2026-09-01", end: "2026-09-04", flow: "light" }], 7);
+    expect(bare.version).toBe(1);
+    expect(bare.periods.map(p => [p.id, p.start, p.end, p.flow])).toEqual([["a", "2026-09-01", "2026-09-04", "light"], ["b", "2026-10-01", null, "medium"]]);
+    const dup = migrateCycleData({ version: 1, periods: [{ id: "a", start: "2026-09-01" }, { id: "a", start: "2026-10-01" }] });
+    expect(dup.periods.map(p => p.id)).toEqual(["a", "a-2"]);
+  });
+
+  it("is idempotent", () => {
+    const once = migrateCycleData([{ id: "a", start: "2026-09-01", symptoms: ["cramps"], note: "n" }], 1);
+    expect(migrateCycleData(JSON.parse(JSON.stringify(once)), 2)).toEqual(once);
+  });
+});
 
 const savedMed = { id: "x", name: "Real med", perDose: "1 tablet", times: ["08:00"], stock: 12, slot: 1 };
 
@@ -50,6 +69,14 @@ describe("backup file", () => {
     for (const hidden of ["logEdit", "ABCDEFGHJKLMNPQR", "secret-key", "hunter2", "a@b.c", "tok"]) expect(raw).not.toContain(hidden);
     expect(file.patients.me.meds[0].name).toBe("Real med");
     expect(file.patients.me.localOnly).toBe(true);
+  });
+
+  it("never carries period data, even if a record somehow had it", () => {
+    const file = buildBackup({ me: { id: "me", name: "Me", meds: [savedMed], cycle: { periods: [{ start: "2026-11-01", note: "secret-cycle-note" }] }, periods: [{ start: "2026-11-01" }] } });
+    const raw = JSON.stringify(file);
+    expect(raw).not.toContain("secret-cycle-note");
+    expect(file.patients.me.cycle).toBeUndefined();
+    expect(file.patients.me.periods).toBeUndefined();
   });
 
   it("restores into an empty record without deleting a different person", () => {
