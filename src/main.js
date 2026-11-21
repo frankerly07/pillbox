@@ -276,11 +276,12 @@ function eventSheet() {
 
 function todayBlock(pid) {
   const p = snap(pid), now = new Date(), list = M.dosesOn(now, p.meds, p.doses, opts());
-  const dueNow = list.filter(d => (d.status === "due" || d.status === "missed") && !d.log);
+  // Doses past the due window are listed under "Missed" (missedBlock) with older days, not here.
+  const dueNow = list.filter(d => d.status === "due" && !d.log);
   const rest = list.filter(d => !dueNow.includes(d));
   const upcoming = list.find(d => d.status === "upcoming");
   const taken = list.filter(d => d.status === "taken").length;
-  let h = "";
+  let h = missedBlock(pid);
   if (dueNow.length) {
     h += `<section class="stack"><h2>${esc(t(dueNow.some(d => d.status === "missed") ? "today.late" : "today.dueNow"))}</h2>` + dueNow.map(d => `<div class="due-row"><button class="log-one" data-act="well" data-pid="${esc(pid)}" data-key="${esc(d.key)}">
       <span class="eyebrow">${esc(t(d.status === "missed" ? "today.late" : "today.dueNow"))} · ${fmtTime(d.time)}</span>
@@ -303,6 +304,20 @@ function todayBlock(pid) {
   const low = M.lowStock(p.meds, p.doses);
   if (low.length) h += `<div class="banner dup"><div><strong>${esc(t("supply.refillSoon"))}</strong> ${low.map(m => esc(m.name) + " (" + esc(t("supply.left", { qty: left(m, p.doses) })) + ")").join(", ")}</div></div>`;
   return h;
+}
+
+// Missed scheduled doses from the last week (two weeks for weekly and longer schedules), newest first.
+// Hidden when there are none. "Log as taken" opens the log sheet at the scheduled date and time.
+const shortDate = day => capFirst(fmtDateL(M.parseDay(day), { weekday: "short", month: "short", day: "numeric" }));
+function missedBlock(pid) {
+  const p = snap(pid), list = M.findMissedDoses(p.meds, p.doses, opts());
+  if (!list.length) return "";
+  return `<section class="stack missed-card" aria-labelledby="missed-h"><h2 id="missed-h">${esc(t("today.missed"))}</h2>
+    <p class="muted small">${esc(t("today.missedHelp"))}</p><div class="list">` + list.map(d => `<div class="item missed-row"><div class="stack-tight">
+      <div><span aria-hidden="true">${M.typeIcon(d.med)}</span> <strong>${esc(d.med.name)}</strong> ${esc(d.med.strength || "")}</div>
+      <div class="muted mono">${esc(shortDate(d.day))} · ${fmtTime(d.time)}</div></div>
+      <div class="missed-acts"><button class="btn-sm btn-primary" data-act="missed-log" data-pid="${esc(pid)}" data-key="${esc(d.key)}" aria-label="${esc(t("today.logAsTakenAria", { name: d.med.name, date: shortDate(d.day), time: fmtTime(d.time) }))}">${esc(t("today.logAsTaken"))}</button>
+      <button class="btn-sm" data-act="skip" data-pid="${esc(pid)}" data-key="${esc(d.key)}" aria-label="${esc(t("today.skipAria", { name: d.med.name, date: shortDate(d.day), time: fmtTime(d.time) }))}">${esc(t("today.skip"))}</button></div></div>`).join("") + `</div></section>`;
 }
 
 // The "actual" side of a calendar day row: when it was taken (and how far off schedule), or why not.
@@ -806,9 +821,15 @@ function render() {
 }
 // Dose sheet. S.sheet = { pid, key } for one dose, or { pid, time, group: true } for "Taken earlier?" on the
 // take-all button. `edit` shows the time picker (late logging, or changing a taken dose's time).
-function timeForm(day, scheduled, value, label) {
-  return `<form class="stack" id="timeform"><div class="field"><label for="t-at">${label}</label>
-    <input id="t-at" name="at" type="time" required value="${esc(S.sheet.value || value || M.defaultLogTime(day, scheduled))}"></div>
+// Date + time pickers for a log. The date can't be after today; the submit handler also refuses a future time.
+function whenFields(prefix, legend, day, time) {
+  return `<fieldset class="field when-fields"><legend class="lbl">${esc(legend)}</legend><div class="when-row">
+    <div class="field"><label for="${prefix}-date">${esc(t("sheet.date"))}</label><input id="${prefix}-date" name="date" type="date" required max="${dayKey(new Date())}" value="${esc(day)}"></div>
+    <div class="field"><label for="${prefix}-at">${esc(t("sheet.time"))}</label><input id="${prefix}-at" name="at" type="time" required value="${esc(time)}"></div></div></fieldset>`;
+}
+function timeForm(day, scheduled, label) {
+  const def = M.defaultLogMoment(day, scheduled);
+  return `<form class="stack" id="timeform">${whenFields("t", label, S.sheet.date || def.day, S.sheet.value || def.time)}
     ${S.sheet.error ? `<div class="banner dup">${esc(S.sheet.error)}</div>` : ""}
     <div class="row"><button class="btn-primary" type="submit">${esc(t("btn.save"))}</button><button type="button" data-act="edit-cancel">${esc(t("btn.cancel"))}</button></div></form>`;
 }
@@ -822,7 +843,7 @@ function editLogForm(d) {
     <div class="amount"><input id="e-amt" name="amount" type="number" min="0" step="any" required value="${esc(M.fmtNum(amount))}">
     <select name="unit" aria-label="${esc(t("sheet.unit"))}">${units.map(u => `<option value="${esc(u)}" ${u === unit ? "selected" : ""}>${esc(unitOption(u))}</option>`).join("")}</select></div>
     <div class="muted small">${esc(t("sheet.amountHelp"))}</div></div>
-    <div class="field"><label for="e-at">${esc(t("sheet.time"))}</label><input id="e-at" name="at" type="time" required value="${esc(timeVal)}"></div>
+    ${whenFields("e", t("sheet.whenTaken"), S.sheet.date || dayKey(new Date(d.log.at)), timeVal)}
     ${S.sheet.error ? `<div class="banner dup">${esc(S.sheet.error)}</div>` : ""}
     <div class="row"><button class="btn-primary" type="submit">${esc(t("btn.saveLog"))}</button><button type="button" data-act="edit-cancel">${esc(t("btn.cancel"))}</button></div></form>`;
 }
@@ -833,12 +854,12 @@ function additionalForm() {
   const units = M.TYPES[nm.type].doseUnits;
   const amount = S.sheet.amount ?? nm.doseAmount;
   const unit = S.sheet.unit || nm.doseUnit;
-  const atLocal = S.sheet.atLocal || (dayKey(new Date()) + "T" + M.hm(new Date()));
+  const now = new Date();
   return `<form class="stack" id="addform"><div class="eyebrow">${esc(t("add.title"))}</div><h2>${esc(med.name)}</h2>
     <p class="muted">${esc(t("add.help"))}</p>
     <div class="field"><label for="a-amt">${esc(t("add.amount"))}</label><div class="amount"><input id="a-amt" name="amount" type="number" min="0" step="any" required value="${esc(M.fmtNum(amount))}">
     <select name="unit" aria-label="${esc(t("sheet.unit"))}">${units.map(u => `<option value="${esc(u)}" ${u === unit ? "selected" : ""}>${esc(unitOption(u))}</option>`).join("")}</select></div></div>
-    <div class="field"><label for="a-at">${esc(t("ev.when"))}</label><input id="a-at" name="at" type="datetime-local" required max="${dayKey(new Date()) + "T" + M.hm(new Date())}" value="${esc(atLocal)}"></div>
+    ${whenFields("a", t("ev.when"), S.sheet.date || dayKey(now), S.sheet.value || M.hm(now))}
     ${S.sheet.error ? `<div class="banner dup">${esc(S.sheet.error)}</div>` : ""}
     <div class="row"><button class="btn-primary" type="submit">${esc(t("btn.saveLog"))}</button><button type="button" data-act="close-sheet">${esc(t("btn.cancel"))}</button></div></form>`;
 }
@@ -852,14 +873,14 @@ function sheetView() {
     const list = M.dosesOn(new Date(), p.meds, p.doses, opts()).filter(d => d.time === S.sheet.time && !d.log);
     if (!list.length) { S.sheet = null; return ""; }
     return wrap(`<div class="eyebrow">${esc(t("dose.scheduledAt", { time: fmtTime(S.sheet.time) }))}</div><h2>${esc(t(list.length === 1 ? "sheet.whenIt" : "sheet.whenThem"))}</h2>
-      <div class="muted">${list.map(d => esc(d.med.name)).join(" · ")}</div>${timeForm(list[0].day, S.sheet.time, "", t("sheet.takenAt"))}`);
+      <div class="muted">${list.map(d => esc(d.med.name)).join(" · ")}</div>${timeForm(list[0].day, S.sheet.time, t("sheet.takenAt"))}`);
   }
   const d = findDose(pid, key);
   if (!d) { S.sheet = null; return ""; }
   const who = d.log ? (d.log.byName && d.log.by === "caregiver" ? " " + esc(t("dose.by", { name: d.log.byName })) : "") + (d.log.source === "pillbox" ? " " + esc(t("dose.pillboxParen")) : "") : "";
   let actions;
   if (S.sheet.edit && d.log) actions = editLogForm(d);
-  else if (S.sheet.edit) actions = timeForm(d.day, d.time, "", t("sheet.whenLogged"));
+  else if (S.sheet.edit) actions = timeForm(d.day, d.time, t("sheet.whenLogged"));
   else if (d.log && d.log.status === "taken") actions = `<div class="row"><button data-act="edit-time" data-pid="${esc(pid)}" data-key="${esc(d.key)}">${esc(t("sheet.correct"))}</button><button data-act="undo" data-pid="${esc(pid)}" data-key="${esc(d.key)}">${esc(t("btn.undo"))}</button><button class="btn-danger" data-act="remove-log" data-pid="${esc(pid)}" data-key="${esc(d.key)}">${esc(t(S.sheet.confirmRemove ? "sheet.removeConfirm" : "sheet.remove"))}</button></div>
     <p class="muted small">${esc(t("sheet.removeHelp"))}</p>`;
   else if (d.log) actions = `<div class="row"><button data-act="undo" data-pid="${esc(pid)}" data-key="${esc(d.key)}">${esc(t("sheet.undoSkip"))}</button></div><p class="muted small">${esc(t("sheet.skipStays"))}</p>`;
@@ -868,7 +889,7 @@ function sheetView() {
       <button class="btn-quiet" data-act="skip" data-pid="${esc(pid)}" data-key="${esc(d.key)}">${esc(t("sheet.skip"))}</button>
       <p class="muted small">${esc(t("sheet.skipHelp"))}</p>`;
   return wrap(`<div class="eyebrow">${esc(M.medSummary(d.med))}</div><h2>${esc(d.med.name)} ${esc(d.med.strength)}</h2>${d.med.notes ? `<div class="muted">${esc(M.sampleText(d.med.notes))}</div>` : ""}
-    <p class="dose-times"><strong>${esc(M.fmtDoseTimes(d))}</strong>${who}</p>${actions}`);
+    <p class="dose-times"><strong>${d.day && d.day !== dayKey(new Date()) ? esc(shortDate(d.day)) + " · " : ""}${esc(M.fmtDoseTimes(d))}</strong>${who}</p>${actions}`);
 }
 function route() {
   const h = location.hash.slice(1), valid = NAV[S.role].map(x => x[0]).concat(cycleOn() ? ["cycle"] : []);
@@ -936,7 +957,8 @@ function cleanSchedule(sc) {
 }
 // Remember the picked time so a background redraw (new data, 30 s tick) doesn't reset the picker.
 document.addEventListener("input", e => {
-  if (e.target.id === "t-at" && S.sheet) S.sheet.value = e.target.value;
+  if (["t-at", "e-at", "a-at"].includes(e.target.id) && S.sheet) S.sheet.value = e.target.value;
+  if (["t-date", "e-date", "a-date"].includes(e.target.id) && S.sheet) S.sheet.date = e.target.value;
   if (e.target.id === "drug-q" && S.drug) S.drug.query = e.target.value;
   if (e.target.id === "drug-code" && S.drug) S.drug.code = e.target.value;
 });
@@ -979,6 +1001,8 @@ document.addEventListener("click", async e => {
       case "dismiss": S.alert = null; break;
       case "close-sheet": S.sheet = null; break;
       case "open-sheet": S.sheet = { pid, key: el.dataset.key }; break;
+      // From the Today "Missed" list: straight to the date + time picker, starting at the scheduled date and time.
+      case "missed-log": S.sheet = { pid, key: el.dataset.key, edit: true }; break;
       case "edit-time": S.sheet = { pid, key: el.dataset.key, edit: true }; document.getElementById("toast").hidden = true; break;
       case "edit-cancel": if (S.sheet) { S.sheet.edit = false; S.sheet.error = ""; if (S.sheet.group) S.sheet = null; } break;
       case "ev-new": S.sheet = newEventSheet(pid); break;
@@ -1195,12 +1219,12 @@ document.addEventListener("submit", async e => {
       if (startCount != null) await adjustStock(S.pid, m.id, startCount, stockEv("start"));
       S.editing = null; S.medDetail = m.id; toast(t(isNew ? "toast.medAdded" : "toast.saved") + (calMsg ? ". " + calMsg : ""));
     } else if (f.id === "timeform") {
-      const sh = S.sheet, picked = new FormData(f).get("at"), p = snap(sh.pid);
+      const sh = S.sheet, fd = new FormData(f), p = snap(sh.pid);
       const list = sh.group ? M.dosesOn(new Date(), p.meds, p.doses, opts()).filter(d => d.time === sh.time && !d.log) : [findDose(sh.pid, sh.key)].filter(Boolean);
       if (!list.length) { S.sheet = null; render(); return; }
-      // changing a logged time keeps the day it was taken (a Monday dose taken Tuesday stays on Tuesday)
-      const when = list[0].log ? M.editedLogTime(list[0].log.at, picked) : M.logTimeFor(list[0].day, list[0].time, picked);
-      if (!when) { sh.error = t("err.future"); render(); return; }
+      // The log keeps the scheduled dose's key, so a dose logged days later still counts for the day it was scheduled.
+      const picked = M.logMoment(fd.get("date"), fd.get("at")), when = picked.at;
+      if (!when) { sh.error = t(picked.error === "future" ? "err.futureWhen" : "err.pickWhen"); render(); return; }
       let label = M.fmtLogged({ status: "taken", at: when.toISOString() }, list[0].day); label = label[0].toLowerCase() + label.slice(1);
       if (list[0].log) {
         await commit(sh.pid, { opId: M.uid(), kind: "edit", medId: list[0].med.id, key: list[0].key, amount: list[0].log.amount, unit: list[0].log.unit, at: when.toISOString() });
@@ -1235,18 +1259,16 @@ document.addEventListener("submit", async e => {
     } else if (f.id === "editform") {
       const sh = S.sheet, d = findDose(sh.pid, sh.key);
       if (!d?.log) { S.sheet = null; render(); return; }
-      const fd = new FormData(f);
-      const when = M.editedLogTime(d.log.at, fd.get("at"));
-      if (!when) { sh.error = t("err.future"); render(); return; }
+      const fd = new FormData(f), picked = M.logMoment(fd.get("date"), fd.get("at")), when = picked.at;
+      if (!when) { sh.error = t(picked.error === "future" ? "err.futureWhen" : "err.pickWhen"); render(); return; }
       const amount = Number(fd.get("amount"));
       if (!(amount > 0)) { sh.error = t("err.amount"); render(); return; }
       await commit(sh.pid, { opId: M.uid(), kind: "edit", medId: d.med.id, key: d.key, amount, unit: fd.get("unit"), at: when.toISOString() });
       toast(t("toast.logUpdated")); S.sheet = null;
     } else if (f.id === "addform") {
       const sh = S.sheet, med = snap(sh.pid).meds.find(m => m.id === sh.medId);
-      const fd = new FormData(f), when = new Date(fd.get("at"));
-      if (!med || isNaN(when.getTime())) { sh.error = t("err.pickWhen"); render(); return; }
-      if (when.getTime() > Date.now() + 60000) { sh.error = t("err.future"); render(); return; }
+      const fd = new FormData(f), picked = M.logMoment(fd.get("date"), fd.get("at")), when = picked.at;
+      if (!med || !when) { sh.error = t(picked.error === "future" ? "err.futureWhen" : "err.pickWhen"); render(); return; }
       const amount = Number(fd.get("amount"));
       if (!(amount > 0)) { sh.error = t("err.amount"); render(); return; }
       const res = await logAdditional(sh.pid, med, when, amount, fd.get("unit"), true);

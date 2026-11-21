@@ -349,6 +349,64 @@ export function logTimeFor(day, scheduled, picked, now = Date.now()) {
 }
 
 /**
+ * The moment picked with a date ("YYYY-MM-DD") and a time ("HH:MM") in the log sheet, in local time.
+ * { at: Date } when valid, else { error: "invalid" | "future" }. A minute of slack matches commitAdministration.
+ */
+export function logMoment(day, time, now = Date.now()) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day || "") || !isTimeOfDay(time)) return { error: "invalid" };
+  const d = at(parseDay(day), time);
+  if (isNaN(d.getTime()) || dayKey(d) !== day) return { error: "invalid" };
+  return d.getTime() > now + 60000 ? { error: "future" } : { at: d };
+}
+/**
+ * Where the log sheet's date and time start for a dose scheduled on `day` at `scheduled`: that date and time,
+ * or now when that moment hasn't happened yet (a dose taken early). { day, time }.
+ */
+export function defaultLogMoment(day, scheduled, now = Date.now()) {
+  if (day && isTimeOfDay(scheduled) && at(parseDay(day), scheduled).getTime() <= now) return { day, time: scheduled };
+  const n = new Date(now);
+  return { day: dayKey(n), time: hm(n) };
+}
+
+// ---- missed doses (Today tab) ----
+export const MISSED_DAYS = 7;
+export const MISSED_DAYS_LONG = 14;
+/** Days between doses of a schedule, roughly: 1 for daily, n for every n days, 7n for every n weeks, 28 for monthly. */
+export function intervalDays(med) {
+  const s = scheduleOf(med), n = Math.max(1, Math.floor(Number(s.n) || 1));
+  switch (s.kind) {
+    case "everyNDays": return n;
+    case "everyNWeeks": return 7 * n;
+    case "monthly": return 28;
+    case "weekdays": return new Set((s.days || []).map(Number)).size === 1 ? 7 : 1;
+    case "prn": return 0;
+    default: return 1;
+  }
+}
+/**
+ * Scheduled doses that were not logged (taken or skipped) and whose time, plus the due window, has passed.
+ * Looks back `days` days (7) and today; medicines given every 7 days or less often stay listed for `longDays` (14).
+ * As-needed medicines never count; start/end dates (and createdAt, when saved) are respected. Newest first.
+ * Same "missed" rule as dosesOn, so the Calendar and this list agree.
+ * @returns {Array<{key, med, day, time, slot, when, status:"missed"}>}
+ */
+export function findMissedDoses(meds, doses, { now = Date.now(), dueWindowMin = 60, days = MISSED_DAYS, longDays = MISSED_DAYS_LONG } = {}) {
+  const active = (meds || []).filter(m => m && !isPrn(m));
+  const out = [];
+  for (let i = 0; i <= Math.max(days, longDays); i++) {
+    const date = new Date(now); date.setDate(date.getDate() - i); date.setHours(12, 0, 0, 0);
+    const list = active.filter(m => i <= days || intervalDays(m) >= 7);
+    if (!list.length) continue;
+    for (const d of dosesOn(date, list, doses || {}, { now, dueWindowMin })) {
+      if (d.status !== "missed" || d.log) continue;
+      if (Number.isFinite(d.med.createdAt) && d.when < d.med.createdAt) continue;
+      out.push(d);
+    }
+  }
+  return out.sort((a, b) => b.when - a.when || a.med.name.localeCompare(b.med.name));
+}
+
+/**
  * The new moment for a logged dose whose time is changed to `picked` ("HH:MM"): that time on the day before, the
  * day of, or the day after when it was logged, whichever is nearest (within 12 h of) the logged moment, so the day
  * doesn't jump. null when that would be in the future.
