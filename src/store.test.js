@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LocalStore, sampleMeds } from "./store.js";
+import { readFileSync } from "node:fs";
+import { LocalStore, sampleMeds, CYCLE_KEY, loadCycle, saveCycle } from "./store.js";
 import { setLang } from "./i18n.js";
 import { doseLabel, sampleText, calendarDescription } from "./model.js";
 
@@ -55,6 +56,47 @@ describe("LocalStore", () => {
     await expect(store.createInvite()).rejects.toThrow(/este teléfono/);
     await expect(store.signIn()).rejects.toThrow(/sincronización/);
     expect((await store.commitDose("nobody", {})).message).toBe("Ese registro no está en este teléfono.");
+  });
+});
+
+describe("period log storage", () => {
+  const period = { id: "c1", start: "2026-11-01", end: "2026-11-05", flow: "heavy", symptoms: ["cramps"], note: "secret-cycle-note" };
+
+  it("saves and loads on its own key and survives bad storage", () => {
+    expect(loadCycle()).toEqual({ version: 1, periods: [] });
+    saveCycle({ periods: [period] });
+    expect(JSON.parse(localStorage.getItem(CYCLE_KEY)).periods[0].note).toBe("secret-cycle-note");
+    expect(loadCycle().periods[0]).toMatchObject({ id: "c1", flow: "heavy", symptoms: ["cramps"] });
+    localStorage.setItem(CYCLE_KEY, "{oops");
+    expect(loadCycle()).toEqual({ version: 1, periods: [] });
+    const bad = { getItem() { throw new Error("no"); }, setItem() { throw new Error("no"); } };
+    expect(loadCycle(bad).periods).toEqual([]);
+    expect(() => saveCycle({ periods: [period] }, bad)).not.toThrow();
+  });
+
+  it("is not in patient records, backups, or caregiver views", async () => {
+    saveCycle({ periods: [period] });
+    const store = new LocalStore({});
+    store.applyProfile({ usePatient: true, useCaregiver: true, recommended: "skip" });
+    await store.saveMed("me", { id: "x", name: "Factor", times: ["08:00"], perDose: "1 vial" });
+    const watched = [];
+    store.watchPatient("me", p => watched.push(JSON.stringify(p)));
+    for (const raw of [localStorage.getItem("pillbox.v2"), JSON.stringify(store.exportBackup()), ...watched, JSON.stringify(store.patientList())]) {
+      expect(raw).not.toContain("secret-cycle-note");
+      expect(raw).not.toContain("periods");
+    }
+    // clearing example medicines leaves the period log alone
+    store.clearExamples();
+    expect(loadCycle().periods).toHaveLength(1);
+  });
+
+  it("is never read by the cloud store or the caregiver functions", () => {
+    const store = readFileSync(new URL("./store.js", import.meta.url), "utf8");
+    const cloud = store.slice(store.indexOf("export class CloudStore"), store.indexOf("// Period log:"));
+    expect(cloud.length).toBeGreaterThan(1000);
+    for (const src of [cloud, readFileSync(new URL("./cloud-handlers.js", import.meta.url), "utf8"), readFileSync(new URL("../functions/index.js", import.meta.url), "utf8")]) {
+      expect(src).not.toMatch(/cycle|period/i);
+    }
   });
 });
 

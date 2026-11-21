@@ -5,7 +5,7 @@
 import { uid, dayKey, normalizeMed, normalizeEvent, anchorsToLastDose, doseAnchors, COLORS } from "./model.js";
 import { commitAdministration } from "./dose-log.js";
 import { planDoseCommit } from "./cloud-handlers.js";
-import { buildBackup, emptyPatient, migrateLocalData, planImport } from "./migrate.js";
+import { buildBackup, emptyPatient, migrateLocalData, migrateCycleData, planImport } from "./migrate.js";
 import { firebaseConfig } from "./firebase-config.js";
 import { t } from "./i18n.js";
 
@@ -404,6 +404,20 @@ export class CloudStore {
   async removeCaregiver(pid, cuid) { return this.callFn("revokeCaregiver", { pid, caregiverUid: cuid }); }
   exportBackup() { return null; }
   importBackup() { return { ok: false, message: t("err.importLocalOnly") }; }
+}
+
+// Period log: its own key on this phone, in both local and cloud mode. CloudStore never reads it and
+// LocalStore keeps it out of patient records, so caregivers, sync and backup files don't see it.
+export const CYCLE_KEY = "pillbox.cycle";
+export function loadCycle(storage = globalThis.localStorage) {
+  let raw = null;
+  try { raw = JSON.parse(storage?.getItem(CYCLE_KEY) || "null"); } catch (e) { raw = null; }
+  return migrateCycleData(raw);
+}
+export function saveCycle(data, storage = globalThis.localStorage) {
+  const clean = migrateCycleData(data);
+  try { storage?.setItem(CYCLE_KEY, JSON.stringify(clean)); } catch (e) {}
+  return clean;
 }
 
 export function makeStore(opts = {}) {

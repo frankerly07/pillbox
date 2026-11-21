@@ -3,6 +3,7 @@
   --bg:#EEF1F8; --surface:#FFFFFF; --sunk:#E2E6F2; --fg:#030423; --muted:#555C78; --line:#C8CEE0;
   --accent:#2965D2; --accent-text:#2965D2; --accent-ink:#FFFFFF; --accent-soft:#E8F0FC; --focus:#2965D2;
   --ok:#0D6E43; --ok-ink:#FFFFFF; --ok-soft:#D7F3E4; --warn:#8A5500; --warn-soft:#FBEBD0; --bad:#B3261E; --bad-soft:#F8DEDB;
+  --period:#9C2C6E; --period-soft:#F6DCEB;
   --f-display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
   --f-body:"Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --f-mono:"JetBrains Mono", ui-monospace, "Roboto Mono", monospace;
@@ -10,11 +11,11 @@
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
   --bg:#030423; --surface:#12173A; --sunk:#01021A; --fg:#E8EBF8; --muted:#9AA0BC; --line:#32387A;
   --accent:#2965D2; --accent-text:#7FA4E6; --accent-ink:#FFFFFF; --accent-soft:#1A2A58; --focus:#7FA4E6;
-  --ok:#3DCF8A; --ok-ink:#030423; --ok-soft:#0C2A1C; --warn:#F0B04A; --warn-soft:#3A2B10; --bad:#F2867C; --bad-soft:#3D1A17; color-scheme:dark}}
+  --ok:#3DCF8A; --ok-ink:#030423; --ok-soft:#0C2A1C; --warn:#F0B04A; --warn-soft:#3A2B10; --bad:#F2867C; --bad-soft:#3D1A17; --period:#E88BC0; --period-soft:#3A1430; color-scheme:dark}}
 :root[data-theme="dark"]{
   --bg:#030423; --surface:#12173A; --sunk:#01021A; --fg:#E8EBF8; --muted:#9AA0BC; --line:#32387A;
   --accent:#2965D2; --accent-text:#7FA4E6; --accent-ink:#FFFFFF; --accent-soft:#1A2A58; --focus:#7FA4E6;
-  --ok:#3DCF8A; --ok-ink:#030423; --ok-soft:#0C2A1C; --warn:#F0B04A; --warn-soft:#3A2B10; --bad:#F2867C; --bad-soft:#3D1A17; color-scheme:dark}
+  --ok:#3DCF8A; --ok-ink:#030423; --ok-soft:#0C2A1C; --warn:#F0B04A; --warn-soft:#3A2B10; --bad:#F2867C; --bad-soft:#3D1A17; --period:#E88BC0; --period-soft:#3A1430; color-scheme:dark}
 *{box-sizing:border-box}
 html,body{min-height:100%}
 body{background:var(--bg);color:var(--fg);font:16px/1.5 var(--f-body);margin:0}
@@ -252,3 +253,22 @@ textarea{resize:vertical}
 .history-day h3{color:var(--muted);font-size:.9rem;text-transform:uppercase;letter-spacing:.06em;margin:4px 4px 2px}
 .history-amt{font-weight:700;text-align:right;display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
 .empty-state{text-align:center;display:flex;flex-direction:column;gap:4px}
+/* cycle tracking (optional): logged period days */
+.cal-day .pd-mark{position:absolute;bottom:4px;left:50%;transform:translateX(-50%);width:16px;height:4px;border-radius:2px;background:var(--period)}
+.cal-day.period{background:var(--period-soft)}
+.lg.period{background:var(--period-soft);border:1.5px solid var(--period)}
+.chip.period{background:var(--period-soft);color:var(--period)}
+.history-day h3 .chip{vertical-align:middle;margin-left:4px}
+.cycle-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.cycle-grid .big{font-family:var(--f-mono);font-size:1.6rem;font-weight:500;line-height:1.1}
+
+/* Today: missed doses. Same card list as elsewhere, with a red edge so it reads as needing attention. */
+.missed-card .list{border-color:var(--bad);border-left-width:5px}
+.missed-row{flex-wrap:wrap}
+.missed-row > .stack-tight{flex:1 1 180px}
+.missed-acts{display:flex;gap:8px;flex-wrap:wrap}
+.missed-acts .btn-sm{min-height:44px}
+@media (max-width:420px){.missed-acts{width:100%}.missed-acts .btn-sm{flex:1}}
+/* Log sheet: date and time side by side, stacked on very narrow screens. */
+.when-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:340px){.when-row{grid-template-columns:1fr}}
