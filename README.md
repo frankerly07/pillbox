@@ -15,7 +15,7 @@ Every push to `main` builds the apps on GitHub Actions and publishes them. Downl
 - **`Pillbox.apk`** (`com.pillbox.patient`) is the app to install. On the home screen it is named PillAlly. A new build installs over an earlier install of this same app and keeps that app's records.
 - **`Pillbox-Care.apk`** (`com.pillbox.care`) is the older separate app. On the home screen it is named PillAlly Care. Keep installing updates of it if you already use it: the update does not delete its records. It tells you how to export a backup. New phones should use Pillbox.apk only.
 
-On the phone, open the file and allow "Install unknown apps" for your browser or Files app when Android asks. Both builds are signed with the same key, which is never stored in the repository: it lives in the private GitHub Actions cache, or in `PILLBOX_KEYSTORE_B64` and `PILLBOX_KEYSTORE_PASSWORD` if you add those secrets.
+On the phone, open the file and allow "Install unknown apps" for your browser or Files app when Android asks. Both builds are signed with the same key, which is never stored in the repository: it is kept in the `PILLBOX_KEYSTORE_B64` and `PILLBOX_KEYSTORE_PASSWORD` repository secrets, which the build uses. (Without those secrets, the workflow falls back to a key kept in the private GitHub Actions cache.)
 
 ## Moving off the separate PillAlly Care app
 
