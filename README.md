@@ -21,9 +21,11 @@ On the phone, open the file and allow "Install unknown apps" for your browser or
 
 Android gives each application id its own storage. PillAlly cannot read PillAlly Care's data, and this project does not delete either one.
 
-1. Open the PillAlly Care app that is already installed. Use **Export backup**. That downloads `pillbox-backup.json` with medicines, logs, events, and supply history. It does not include account passwords or invite codes.
+1. Update the PillAlly Care app that is already installed, then open it and use **Export backup**. On Android this opens the share sheet: save `pillbox-backup.json` to Files, Drive, or email it to yourself. In a browser it downloads. The file has medicines, logs, events, and supply history. It does not include account passwords or invite codes. (Builds before this fix tried a web download, which Android's WebView ignores, so nothing was saved even though the app said it was.)
 2. Install or open **PillAlly** (`com.pillbox.patient`). Choose how you use it, then **More** or **Settings › Import backup** and pick the file.
 3. Imported people are marked **on this phone only**. The file is not a live link to another phone.
+
+Import never deletes anything. If this phone's own record is completely empty (no medicines, logs, events, or supply history), the file restores into it. Otherwise the file's people are added beside what is here. Just before an import, the app keeps a copy of this phone's records in its own storage (`pillbox.v2.before-import`). If saved records can't be read when the app starts, the unreadable text is kept under `pillbox.v2.unreadable` instead of being overwritten. Neither copy has a button in the app yet. Getting one back means reading it from the WebView's storage.
 
 If PillAlly Care has no records you need, you can leave it installed. Uninstalling it deletes only that app's data.
 
@@ -89,6 +91,7 @@ When compartment N's lid opens, the device sends the text `OPEN:N`. In the app, 
 npm install
 npm run dev            # http://localhost:5173 — ?role=care previews the older separate PillAlly Care app
 npm run sync           # build the web app and copy it into the Android project
+npm test               # vitest (no network, no phone needed)
 ```
 
 Building APKs locally needs the Android SDK: `cd android && ./gradlew assemblePatientDebug assembleCaregiverDebug`.
@@ -96,18 +99,25 @@ Building APKs locally needs the Android SDK: `cd android && ./gradlew assemblePa
 ### Layout
 
 - `src/model.js`: dose schedule logic (pure functions)
+- `src/reminders.js`: settings on this phone, and the one-tap "alarms and calendar for all my medicines"
+- `src/i18n.js`, `src/i18n-en.js`, `src/i18n-es.js`: English and Spanish text. **Settings › Language** picks one, or follows the phone
+- `src/body-map.js`: the tappable body figure on the event sheet
+- `src/drug-catalog.js`, `src/rxnav.js`: drug-name search and package-code parsing against NIH RxNav
 - `src/dose-log.js`: one log, edit, skip, or removal, and the inventory delta, including retries
 - `src/access.js`: permissions and invite codes. A screen role is not an input
 - `src/cloud-handlers.js`: invite and dose handlers tested against an in-memory database
 - `src/migrate.js`: keep this install's records, and backup import/export
 - `src/store.js`: `LocalStore` (this phone) and `CloudStore` (Firebase)
-- `src/native.js`: Android alarms, caregiver alerts, Bluetooth, and which package is installed
+- `src/native.js`: Android alarms, caregiver alerts, calendar, backup file, barcode scan, Bluetooth, and which package is installed
 - `src/main.js`: screens
 - `functions/index.js`: undeployed Firebase wrapper
 - `android/app/build.gradle`: `patient` (`com.pillbox.patient`) and `caregiver` (`com.pillbox.care`)
 - `firestore.rules`: who can read and write what. Clients cannot write invites or the access map
 
 ## Known limits
+
+- `npm audit` reports high-severity advisories in `@grpc/grpc-js` through `firebase` (Firestore). Sync is off in this build, so that code doesn't run, but upgrading `firebase` is still needed before sync is turned on. `npm audit fix` would also change runtime Firebase packages, so it hasn't been applied.
+- Fonts come from Google Fonts at start-up. Offline, or where Google is blocked, the app falls back to system fonts.
 
 - Linking and caregiver logging do not work until Firebase config, rules, and Cloud Functions are deployed on Blaze. The app says so. It does not create a local code that looks real.
 - Caregiver missed-dose alerts are scheduled on the caregiver's phone from the latest data it has seen. If that phone has been offline, it can't know about a dose logged that morning. Server push alerts are not in this build.

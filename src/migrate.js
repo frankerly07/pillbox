@@ -1,7 +1,7 @@
 // Local records live in this app's own storage. A different Android package is a different sandbox;
 // this module never claims it can see the other app. It only keeps data already in this one,
 // and builds a backup file a person can move themselves.
-import { normalizeMed, normalizeEvent } from "./model.js";
+import { normalizeMed, normalizeEvent, uid } from "./model.js";
 import { t, tn } from "./i18n.js";
 
 const DROP = ["access", "caregivers", "caregiverUids", "caregiverNames", "linkCode", "linkCodeExpires", "joinCode", "apiKey", "password", "token", "email", "secret"];
@@ -13,14 +13,26 @@ export function emptyPatient(id, name) {
   };
 }
 
+const isObj = v => !!v && typeof v === "object" && !Array.isArray(v);
+/** Medicines from a saved record or a backup file. Anything that isn't a medicine object is left out, and each keeps a text id. */
+export function medList(meds) {
+  return (Array.isArray(meds) ? meds : []).filter(isObj).map(m => normalizeMed({ ...m, id: String(m.id ?? "") || uid() }));
+}
+/** True when a person's record has nothing worth keeping: no medicines, dose logs, events or supply history. */
+export function isEmptyRecord(p) {
+  if (!p) return false;
+  const none = v => !v || (Array.isArray(v) ? !v.length : typeof v === "object" ? !Object.keys(v).length : false);
+  return none(p.meds) && none(p.doses) && none(p.events) && none(p.stockLog);
+}
+
 function copyPatient(id, p) {
   const next = {
     ...p,
     id: p.id || id,
     name: p.name || "Person",
-    meds: (p.meds || []).map(normalizeMed),
-    doses: p.doses && typeof p.doses === "object" ? p.doses : {},
-    events: p.events && typeof p.events === "object" ? p.events : {},
+    meds: medList(p.meds),
+    doses: isObj(p.doses) ? p.doses : {},
+    events: isObj(p.events) ? p.events : {},
     stockLog: Array.isArray(p.stockLog) ? p.stockLog : [],
     doseAudit: Array.isArray(p.doseAudit) ? p.doseAudit : [],
     appliedOps: Array.isArray(p.appliedOps) ? p.appliedOps : [],
@@ -86,7 +98,7 @@ function strippedPatient(id, p) {
   const next = {
     id: p.id || id,
     name: p.name || "Person",
-    meds: (p.meds || []).map(m => ({ ...m })),
+    meds: (Array.isArray(p.meds) ? p.meds : []).filter(isObj).map(m => ({ ...m })),
     doses: { ...(p.doses || {}) },
     events: { ...(p.events || {}) },
     stockLog: [...(p.stockLog || [])],
@@ -108,6 +120,12 @@ export function buildBackup(patients, now = Date.now()) {
   return { pillboxBackup: 1, exportedAt: new Date(now).toISOString(), patients: out };
 }
 
+function eventMap(raw) {
+  const events = {};
+  for (const [eid, ev] of Object.entries(isObj(raw) ? raw : {})) if (isObj(ev)) events[eid] = normalizeEvent({ ...ev, id: eid });
+  return events;
+}
+
 function newId(id, taken, n) {
   let i = n;
   let candidate = id + "-import-" + i;
@@ -126,20 +144,21 @@ export function planImport(existingPatients, backup, { intoEmptyId = null, idSta
   }
   const patients = {};
   for (const [id, p] of Object.entries(existingPatients || {})) patients[id] = structuredClone(p);
-  const entries = Object.entries(backup.patients).filter(([, p]) => p && typeof p === "object");
+  const entries = Object.entries(backup.patients).filter(([, p]) => isObj(p));
   if (!entries.length) return { ok: false, message: t("backup.empty") };
   const imported = [];
-  const emptyTarget = intoEmptyId && patients[intoEmptyId] && !(patients[intoEmptyId].meds || []).length ? intoEmptyId : null;
+  // Only a record with nothing in it (no medicines, logs, events or supply history) is filled from the file.
+  // A record that still has a bleed log or dose history keeps it, and the file is added beside it instead.
+  const emptyTarget = intoEmptyId && isEmptyRecord(patients[intoEmptyId]) ? intoEmptyId : null;
   if (emptyTarget && entries.length === 1) {
     const [, raw] = entries[0];
-    const meds = (raw.meds || []).map(normalizeMed);
-    const events = {};
-    for (const [eid, ev] of Object.entries(raw.events || {})) events[eid] = normalizeEvent({ ...ev, id: eid });
+    const meds = medList(raw.meds);
+    const events = eventMap(raw.events);
     patients[emptyTarget] = {
       ...patients[emptyTarget],
       name: patients[emptyTarget].name && patients[emptyTarget].name !== "Me" ? patients[emptyTarget].name : (raw.name || patients[emptyTarget].name),
       meds,
-      doses: raw.doses && typeof raw.doses === "object" ? raw.doses : {},
+      doses: isObj(raw.doses) ? raw.doses : {},
       events,
       stockLog: Array.isArray(raw.stockLog) ? raw.stockLog : [],
       doseAudit: Array.isArray(raw.doseAudit) ? raw.doseAudit : [],
@@ -150,14 +169,13 @@ export function planImport(existingPatients, backup, { intoEmptyId = null, idSta
   }
   let n = idStart;
   for (const [id, raw] of entries) {
-    const events = {};
-    for (const [eid, ev] of Object.entries(raw.events || {})) events[eid] = normalizeEvent({ ...ev, id: eid });
+    const events = eventMap(raw.events);
     let dest = id;
     if (patients[dest]) { dest = newId(id, patients, n); n += 1; }
     patients[dest] = {
       ...emptyPatient(dest, String(raw.name || "Imported").slice(0, 80)),
-      meds: (raw.meds || []).map(normalizeMed),
-      doses: raw.doses && typeof raw.doses === "object" ? raw.doses : {},
+      meds: medList(raw.meds),
+      doses: isObj(raw.doses) ? raw.doses : {},
       events,
       stockLog: Array.isArray(raw.stockLog) ? raw.stockLog : [],
       doseAudit: Array.isArray(raw.doseAudit) ? raw.doseAudit : [],

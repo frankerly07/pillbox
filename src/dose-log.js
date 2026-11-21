@@ -81,7 +81,7 @@ export function commitAdministration(patient, cmd = {}, now = Date.now()) {
   };
   // Apply a supply delta once. Stock is not clamped, so a later undo adds back the same number.
   const moveStock = (delta, reason, note, key) => {
-    const tracked = typeof med.stock === "number";
+    const tracked = typeof med.stock === "number" && Number.isFinite(med.stock);
     const applied = tracked ? round6(delta) : 0;
     if (tracked && applied) med.stock = round6(med.stock + applied);
     if (applied) {
