@@ -261,3 +261,14 @@ textarea{resize:vertical}
 .history-day h3 .chip{vertical-align:middle;margin-left:4px}
 .cycle-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 .cycle-grid .big{font-family:var(--f-mono);font-size:1.6rem;font-weight:500;line-height:1.1}
+
+/* Today: missed doses. Same card list as elsewhere, with a red edge so it reads as needing attention. */
+.missed-card .list{border-color:var(--bad);border-left-width:5px}
+.missed-row{flex-wrap:wrap}
+.missed-row > .stack-tight{flex:1 1 180px}
+.missed-acts{display:flex;gap:8px;flex-wrap:wrap}
+.missed-acts .btn-sm{min-height:44px}
+@media (max-width:420px){.missed-acts{width:100%}.missed-acts .btn-sm{flex:1}}
+/* Log sheet: date and time side by side, stacked on very narrow screens. */
+.when-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:340px){.when-row{grid-template-columns:1fr}}
